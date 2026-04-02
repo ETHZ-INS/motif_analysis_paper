@@ -1,0 +1,90 @@
+---
+title: "Bias examples"
+output: html_document
+date: "2026-03-31"
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(epiwraps)
+  library(Biostrings)
+  library(BSgenome.Hsapiens.UCSC.hg38)
+  library(BiocParallel)
+  library(patchwork)
+})
+```
+
+```{r}
+samps <- c(Fixed.37C = "SRX10861478.GSM5290898", Fixed.55C = "SRX10861481.GSM5290901",
+           Native.37C = "SRX10861426.GSM5290846", Native.55C = "SRX10861421.GSM5290841")
+```
+
+```{r, eval=FALSE}
+fragInfo <- function(x){
+  seqlevelsStyle(x) <- "UCSC"
+  x <- keepStandardChromosomes(x, "Homo_sapiens", pruning.mode = "coarse")
+  s <- suppressWarnings(getSeq(BSgenome.Hsapiens.UCSC.hg38, x))
+  data.frame(width=width(x), gc=letterFrequency(s, letters="GC", as.prob=TRUE)[,1])
+}
+
+
+bp <- MulticoreParam(4, progress=TRUE)
+bamfolder <- "/mnt/germain/datasets/CusanovichATACprotocols/aligned/"
+d <- dplyr::bind_rows(lapply(samps, \(x){
+  dplyr::bind_rows(bamChrChunkApply(paste0(bamfolder, x, ".bam"), FUN=fragInfo, paired=TRUE, BPPARAM = bp))
+}), .id="sample")
+
+gc_dens <- dplyr::bind_rows(bplapply(split(d$gc, d$sample),
+                                   BPPARAM=bp, function(x){
+  res <- density(x)
+  data.frame(x = res$x, y = res$y)
+}), .id="sample")
+
+wi_dens <- dplyr::bind_rows(bplapply(split(d$width, d$sample),
+                                   BPPARAM=bp, function(x){
+  res <- density(sqrt(x))
+  data.frame(x = res$x^2, y = res$y)
+}), .id="sample")
+
+newNames <- setNames(paste0(names(samps),".",gsub(".+\\.","",samps)), names(samps))
+gc_dens$sample <- factor(gc_dens$sample, names(newNames), newNames)
+wi_dens$sample <- factor(wi_dens$sample, names(newNames), newNames)
+save(gc_dens, wi_dens, file="example_bias.RData")
+```
+
+```{r}
+load("example_bias.RData")
+p1 <- ggplot(gc_dens, aes(x = x, y = y, color=sample)) +
+    geom_line(position="identity", linewidth=1) + theme_bw() +
+  labs(x="GC content", y="density", title="C: GC bias")
+
+p2 <- ggplot(wi_dens, aes(x = x, y = y, color=sample)) +
+    geom_line(position="identity", linewidth=1) + theme_bw() +
+  scale_x_sqrt(limit=c(0,1000), breaks=c(0,100,300,1000)) +
+  labs(x="Width", y="density", title="B: Length bias")
+```
+
+
+```{r}
+se <- readRDS("/mnt/germain/datasets/CusanovichATACprotocols/mergedPeaks_SE.rds")
+dd <- rbind(
+  data.frame(M=rowMeans(assay(se)), A=log1p(assay(se)[,samps[4]])-log1p(assay(se)[,samps[3]]),
+             comparison="Native.37C vs Native.55C"),
+  data.frame(M=rowMeans(assay(se)), A=log1p(assay(se)[,3])-log1p(assay(se)[,2]),
+             comparison="Native.37C, THS vs Nextera Buffer"))
+  
+p3 <- ggplot(dd, aes(M, A)) + geom_hex(bins=c(70,15)) + scale_x_log10(limits=c(1,1000)) +
+    geom_smooth(method="gam") + scale_fill_gradient(low="lightgrey", high="darkred") + 
+    labs(x="Mean accessibility", y="Log-foldchange", title="A: Enrichment bias") + 
+    facet_wrap(~comparison, nrow=2, scale="free_y") + theme_bw()
+```
+
+
+```{r, fig.width=10, fig.height=5}
+pdf("example_bias.pdf", width=10, height=5)
+p12 <- (p2 + p1 + plot_layout(nrow=1, guides="collect") & 
+          guides(color = guide_legend(nrow = 2)) & theme(legend.position = "bottom"))
+(p3 + theme(legend.position = "bottom")) + p12 + plot_layout(nrow=1, widths=c(4,6))
+dev.off()
+```
+

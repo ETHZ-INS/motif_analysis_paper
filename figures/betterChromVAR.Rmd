@@ -1,0 +1,93 @@
+---
+title: "Figure"
+output: html_document
+date: "2026-03-18"
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(ComplexHeatmap)
+  library(ggplot2)
+  library(patchwork)
+  library(cowplot)
+  library(SummarizedExperiment)
+  library(JASPAR2020)
+})
+theme_set(theme_bw())
+```
+
+## betterChromVAR
+
+```{r}
+load(file="../chromVAR_benchmark_30kcells/value_comparisons_hex.RData")
+cors$cor <- sapply(as.numeric(gsub("r=","",cors$cor)), \(x) bquote(rho==.(x)))
+p1 <- ggplot(hex_df, aes(x = x, y = y)) +
+  geom_abline(slope=1, linetype="dashed") + geom_hex(stat = "identity", aes(fill=count)) +
+  scale_fill_gradient(low = "grey80", high="darkred", trans="sqrt", breaks=c(1,1e6,4e6,9e6)) +
+  theme_bw() + facet_wrap(~assay, scale="free") + 
+  geom_text(data=cors, aes(x=-Inf, y=Inf, label=cor), vjust = 1.15, hjust=-0.1) +
+  labs(x="Original chromVAR", y="betterChromVAR")
+
+lf <- list.files("../chromVAR_benchmark_30kcells/benchmarks", full=TRUE)[-1]
+names(lf) <- gsub("chromVAR_|\\.txt", "", basename(lf))
+d <- dplyr::bind_rows(lapply(lf, read.delim), .id="method")
+d[["Running time (min)"]] <- (d$s-d$s[4])/60
+d[["Max memory (MiB)"]] <- d$max_rss
+d <- d[c(3,1,2), c(1, ncol(d)-(0:1))]
+d <- reshape2::melt(d, id.vars="method")
+d$method <- factor(d$method, c("original", "ArchR", "betterChromVAR"))
+p2 <- ggplot(d, aes(method, value)) + geom_col(fill="darkblue") + 
+  xlab(NULL) + coord_flip() + facet_wrap(~variable, scale="free", nrow=2) 
+```
+
+
+## CVnorm
+
+```{r}
+se <- readRDS("../normalization/Cusanovich_SE.rds")
+norms <- lapply(assays(se), \(x){ cor(log1p(as.matrix(x))) })
+names(norms)[1] <- "raw"
+ss <- row.names(sechm::sortRows(norms[[1]]))
+cc <- do.call(cbind, lapply(norms, \(x){
+  x <- x[ss,ss]
+  #diag(x) <- NA
+  x
+}))
+method <- factor(rep(names(norms),each=ncol(se)), names(norms))
+#df <- colData(se)[row.names(cc),]
+
+coltitles <- as.expression(lapply(names(norms), function(x) {
+  y <- norms[[x]]
+  avg_rho <- round(mean(y[lower.tri(y)]), 2)
+  bquote(atop(.(x), bar(rho) == .(avg_rho)))
+}))
+
+
+h <- Heatmap(cc, cluster_columns=FALSE, cluster_rows=FALSE, col=viridis::turbo(101),
+        column_split = method, column_title=coltitles, name="Pearson\ncorrelation",
+        heatmap_legend_param = list(legend_direction="horizontal", title_position="leftcenter"),
+        show_row_names = FALSE, show_column_names = FALSE, column_title_gp=gpar(fontsize=11))
+```
+
+```{r}
+DARs <- readRDS(file="../normalization/Waag_results.rds")
+nDARs <- dplyr::bind_rows(lapply(DARs, \(x) data.frame(nDARs=sum(x$FDR<0.05))), .id="method")
+p4 <- ggplot(nDARs, aes(reorder(method, nDARs), nDARs)) + geom_col(fill="darkblue") +
+  labs(x=NULL, y="Number of\ndifferentially-accessible\nregions (FDR<0.05)") +
+  scale_y_continuous(breaks=scales::pretty_breaks(3))
+```
+
+## Assembly
+
+```{r, fig.width=10, fig.height=6}
+pdf("Figure_betterChromVAR.pdf", width=10, height=6)
+plot_grid(
+  plot_grid( p1, p2, labels="AUTO", scale=0.95, rel_widths=c(3,2)),
+  plot_grid(grid.grabExpr(draw(h, heatmap_legend_side="bottom")),
+            p4 + theme(axis.title.x=element_text(size=10)) + coord_flip(),
+            scale=0.95, rel_widths = c(3.3,1), labels=LETTERS[3:4]),
+  nrow=2
+)
+dev.off()
+```
+

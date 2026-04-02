@@ -1,0 +1,43 @@
+---
+title: "Results comparison"
+output: html_document
+date: "2026-03-18"
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(chromVAR)
+  library(betterChromVAR)
+  library(BiocParallel)
+  library(ggplot2)
+  library(hexbin)
+})
+```
+
+
+```{r}
+o <- readRDS("original_averaged.rds")
+n <- readRDS("results/betterChromVAR.rds")
+d <- data.frame(old=as.numeric(as.matrix(assay(o))), new=as.numeric(as.matrix(assay(n))))
+cors <- c(deviations=cor(d$old,d$new,use="pairwise"))
+hexD <- hexbin(d$old, d$new, xbins = 100)
+d <- data.frame(old=as.numeric(as.matrix(assay(o,"z"))), new=as.numeric(as.matrix(assay(n,"z"))))
+cors <- c(cors, "z-scores"=cor(d$old,d$new,use="pairwise"))
+hexZ <- hexbin(d$old, d$new, xbins = 100)
+
+cors <- data.frame(assay=names(cors), cor=paste0("r=",round(cors,3)))
+
+hex_df <- dplyr::bind_rows(lapply(list("deviations"=hexD, "z-scores"=hexZ), \(hd){
+  data.frame(hcell2xy(hd), count = hd@count)
+}), .id="assay")
+
+save(hex_df, cors, file="value_comparisons_hex.RData")
+
+ggplot(hex_df, aes(x = x, y = y)) +
+  geom_abline(slope=1, linetype="dashed") + geom_hex(stat = "identity", aes(fill=count)) +
+  scale_fill_gradient(low = "grey80", high="darkred", trans="sqrt", breaks=c(1,1e6,4e6,9e6)) +
+  theme_bw() + facet_wrap(~assay, scale="free") + 
+  geom_text(data=cors, aes(x=-Inf, y=Inf, label=cor), vjust = 1.15, hjust=-0.1) +
+  labs(x="Original chromVAR", y="betterChromVAR")
+```
+

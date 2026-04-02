@@ -1,0 +1,122 @@
+---
+title: "Comparison of normalization"
+output: html_document
+date: "2026-03-18"
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(chromVAR)
+  library(betterChromVAR)
+  library(BSgenome.Hsapiens.UCSC.hg38)
+  library(data.table)
+  library(edgeR)
+  library(BiocParallel)
+  library(ComplexHeatmap)
+  library(MotifDb)
+  library(TFBSTools)
+  library(universalmotif)
+  library(memes)
+  library(BSgenome.Mmusculus.UCSC.mm10)
+})
+source("https://raw.githubusercontent.com/ETHZ-INS/DTFAB/refs/heads/main/Scripts/GCnorm.R")
+```
+
+```{r, eval=FALSE}
+se <- readRDS("/mnt/germain/datasets/CusanovichATACprotocols/mergedPeaks_SE2.rds")
+sra <- read.delim("/mnt/germain/datasets/CusanovichATACprotocols/SraRunTable.txt", sep=",")
+md <- fread("https://ftp.ncbi.nlm.nih.gov/geo/series/GSE174nnn/GSE174280/matrix/GSE174280-GPL21697_series_matrix.txt.gz", skip = 39)
+md <- setNames(gsub("-Rep[0-9]+","",colnames(md)[-1]), md[1,-1])
+sra$name <- md[sra$GEO_Accession..exp.]
+md <- as.data.frame(t(sapply(strsplit(sra$name, "-"), \(x) x[c(2,4:6)])))
+colnames(md) <- c("Nuclei", "Buffer", "Temperature", "Tn5")
+sra <- cbind(sra, md)
+row.names(sra) <- paste(sra$Experiment, sra$GEO_Accession..exp., sep=".")
+colData(se) <- DataFrame(sra[colnames(se),c("Bases",colnames(md))])
+
+se <- keepStandardChromosomes(se, pruning.mode = "coarse")
+seqlevelsStyle(se) <- "UCSC"
+se <- addGCBias(se, BSgenome.Hsapiens.UCSC.hg38)
+assay(se, "GCQN") <- GCQuantileNorm(se)
+flbias <- rowData(se)$flbias
+rowData(se)$flbias <- NULL
+se <- CVnorm(se, toAssay="CVnorm")
+rowData(se)$flbias <- flbias
+se <- CVnorm(se, toAssay="CVnorm+FL", bs = c(40,40,6))
+saveRDS(se, file="Cusanovich_SE.rds")
+```
+
+```{r}
+se <- readRDS("Cusanovich_SE.rds")
+```
+
+
+```{r}
+norms <- lapply(assays(se), \(x){ cor(log1p(as.matrix(x))) })
+names(norms)[1] <- "raw"
+ss <- row.names(sechm::sortRows(norms[[1]]))
+cc <- do.call(cbind, lapply(norms, \(x) x[ss,ss]))
+method <- factor(rep(names(norms),each=ncol(se)), names(norms))
+#df <- colData(se)[row.names(cc),]
+
+coltitles <- as.expression(lapply(names(norms), function(x) {
+  y <- norms[[x]]
+  avg_rho <- round(mean(y[lower.tri(y)]), 2)
+  bquote(atop(.(x), bar(rho) == .(avg_rho)))
+}))
+
+
+Heatmap(cc, cluster_columns=FALSE, cluster_rows=FALSE, #right_annotation = rowAnnotation(df=df),
+        column_split = method, column_title=coltitles, name="Pearson\ncorrelation",
+        show_row_names = FALSE, show_column_names = FALSE)
+
+```
+
+```{r}
+bse <- readRDS("bulkATAC.SE.rds")
+bse <- bse[rowSums(assay(bse))>0,]
+assay(bse, "GCQN") <- GCQuantileNorm(bse)
+assay(bse, "GCsmQN") <- GCSmoothQuantile(bse, bio="Group")
+bse <- CVnorm(bse)
+assay(bse, "CVnorm") <- assay(bse, "corrected")
+bse <- CVnorm(bse, grouping = bse$Group)
+assayNames(bse) <- gsub("^corrected$", "smCVnorm", assayNames(bse))
+
+mm <- model.matrix(~Sex+Group, data=as.data.frame(colData(bse)))
+bse <- bse[filterByExpr(as.matrix(assay(bse)), mm),]
+doAna <- function(a){
+  dge <- calcNormFactors(DGEList(a))
+  dge <- estimateDisp(dge, mm)
+  fit <- glmFit(dge, mm)
+  as.data.frame(topTags(glmLRT(fit, "Group45min"), Inf))
+}
+
+res <- bplapply(assays(bse), BPPARAM=MulticoreParam(length(assays(bse)), progress=TRUE), FUN=doAna)
+saveRDS(res, file="Waag_results.rds")
+
+nDARs <- dplyr::bind_rows(lapply(res, \(x) data.frame(nDARs=sum(x$FDR<0.05))), .id="method")
+ggplot(nDARs, aes(reorder(method, nDARs), nDARs)) + geom_col()
+```
+
+```{r}
+DARs <- lapply(res, \(x) row.names(x)[which(x$FDR<0.05)])
+new_DARs <- setdiff(unique(unlist(DARs[grep("CVnorm",names(DARs))])),
+                    unique(unlist(DARs[grep("CVnorm",names(DARs), invert=TRUE)])))
+
+motifs <- query(MotifDb, c("HOCOMOCOv13"))
+motifs <- motifs[grepl("A$|B$",names(motifs))]
+motifs <- do.call(PWMatrixList, convert_motifs(motifs, "TFBSTools-PWMatrix"))
+names(motifs) <- sapply(motifs, \(x) x@name)
+motifs <- motifs[!duplicated(names(motifs))]
+```
+
+```{r}
+r <- rowRanges(bse)
+seqlevelsStyle(r) <- "UCSC"
+seqs <- getSeq(BSgenome.Mmusculus.UCSC.mm10, r)
+names(seqs) <- names(r)
+ame <- memes::runAme(seqs[which(names(r) %in% new_DARs)], control=seqs,
+                     database=convert_motifs(motifs), meme_path="/usr/bin/")
+
+```
+
