@@ -1,0 +1,34 @@
+# Config
+GENOME = "BSgenome.Mmusculus.UCSC.mm10"
+INPUT_RSE = "sce.rds"
+N_BG = 100
+THREADS = 1
+
+rule all:
+    input:
+        "results/original.rds",
+        "results/ArchR.rds",
+        "results/betterChromVAR.rds",
+	"results/scan_only.rds"
+
+rule archr_prepare:
+    input: rse = INPUT_RSE
+    output: arrow = directory("data/archr_project")
+    params: genome = GENOME
+    threads: THREADS
+    benchmark: "benchmarks/archr_conversion.txt"
+    script: "scripts/prepare_archr.R"
+
+rule run_chromvar_benchmark:
+    input:
+        rse = INPUT_RSE,
+        arrow_dir = "data/archr_project"
+    output:
+        dev = "results/{method}.rds"
+    params:
+        method = "{method}",
+	n_bg = N_BG,
+        genome = GENOME
+    threads: THREADS
+    benchmark: "benchmarks/chromVAR_{method}.txt"
+    script: "scripts/run_chromvar.R"

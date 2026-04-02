@@ -1,0 +1,31 @@
+---
+title: "Original_averaged"
+output: html_document
+date: "2026-03-20"
+---
+
+```{r}
+library(SummarizedExperiment)
+library(motifmatchr)
+library(BiocParallel)
+library(chromVARmotifs)
+library(chromVAR)
+library(BSgenome.Mmusculus.UCSC.mm10)
+
+motifs <- chromVARmotifs::encode_pwms
+rse <- readRDS("sce.rds")
+register(SerialParam())
+rse <- addGCBias(rse, genome = BSgenome.Mmusculus.UCSC.mm10)
+motif_ix <- matchMotifs(motifs, rse, genome = BSgenome.Mmusculus.UCSC.mm10)
+set.seed(123)
+bg <- getBackgroundPeaks(rse, niterations=100)
+dev1 <- computeDeviations(object = rse, annotations = motif_ix, background_peaks=bg)
+bg <- getBackgroundPeaks(rse, niterations=100)
+dev2 <- computeDeviations(object = rse, annotations = motif_ix, background_peaks=bg)
+dev <- SummarizedExperiment(list(deviations=(assay(dev1)+assay(dev2))/2,
+                                 z=(assay(dev1,"z")+assay(dev2,"z"))/2),
+                            colData=colData(dev1), rowData=rowData(dev1))
+saveRDS(dev, "original_averaged.rds")
+
+```
+
