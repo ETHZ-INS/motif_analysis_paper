@@ -55,6 +55,7 @@ se <- readRDS("Cusanovich_SE.rds")
 norms <- lapply(assays(se), \(x){ cor(log1p(as.matrix(x))) })
 names(norms)[1] <- "raw"
 ss <- row.names(sechm::sortRows(norms[[1]]))
+saveRDS(ss, file="Cusanovich_sampleOrder.rds")
 cc <- do.call(cbind, lapply(norms, \(x) x[ss,ss]))
 method <- factor(rep(names(norms),each=ncol(se)), names(norms))
 #df <- colData(se)[row.names(cc),]
