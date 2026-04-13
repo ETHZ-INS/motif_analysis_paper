@@ -11,6 +11,7 @@ suppressPackageStartupMessages({
   library(BSgenome.Hsapiens.UCSC.hg38)
   library(BiocParallel)
   library(patchwork)
+  library(ggplot2)
 })
 ```
 
@@ -69,7 +70,7 @@ p2 <- ggplot(wi_dens, aes(x = x, y = y, color=sample)) +
 se <- readRDS("/mnt/germain/datasets/CusanovichATACprotocols/mergedPeaks_SE.rds")
 dd <- rbind(
   data.frame(M=rowMeans(assay(se)), A=log1p(assay(se)[,samps[4]])-log1p(assay(se)[,samps[3]]),
-             comparison="Native.37C vs Native.55C"),
+             comparison="Native.55C vs Native.37C"),
   data.frame(M=rowMeans(assay(se)), A=log1p(assay(se)[,3])-log1p(assay(se)[,2]),
              comparison="Native.37C, THS vs Nextera Buffer"))
   
