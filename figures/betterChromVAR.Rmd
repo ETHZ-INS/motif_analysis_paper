@@ -54,7 +54,17 @@ cc <- do.call(cbind, lapply(norms, \(x){
   x
 }))
 method <- factor(rep(names(norms),each=ncol(se)), names(norms))
-#df <- colData(se)[row.names(cc),]
+
+df <- colData(se)[row.names(cc),c("Nuclei","Temperature","Buffer")]
+df$Buffer <- gsub("_TD","",df$Buffer)
+cols <- list(Temperature=c("37C"="#56B4E9", "55C"="#E69F00"),
+             Buffer=c(THS="#F0E442", Omni="#0072B2", Nextera="#D55E00"),
+             Nuclei=c(Native="#009E73", Fixed="#CC79A7"))
+rowAnno <- rowAnnotation(df=df, col=cols, simple_anno_size = unit(3, "mm"),
+                         annotation_name_gp=gpar(fontsize=9),
+                         annotation_legend_param=list(labels_gp=gpar(fontsize=9),
+                                                      title_gp=gpar(fontsize=9, fontface="bold"),
+                                                      grid_height = unit(2.5, "mm")))
 
 coltitles <- as.expression(lapply(names(norms), function(x) {
   y <- norms[[x]]
@@ -63,7 +73,7 @@ coltitles <- as.expression(lapply(names(norms), function(x) {
 }))
 
 
-h <- Heatmap(cc, cluster_columns=FALSE, cluster_rows=FALSE, col=viridis::turbo(101),
+h <- Heatmap(cc, cluster_columns=FALSE, cluster_rows=FALSE, col=viridis::turbo(101), left_annotation=rowAnno,
         column_split = method, column_title=coltitles, name="Pearson\ncorrelation",
         heatmap_legend_param = list(legend_direction="horizontal", title_position="leftcenter"),
         show_row_names = FALSE, show_column_names = FALSE, column_title_gp=gpar(fontsize=11))
@@ -80,13 +90,13 @@ p4 <- ggplot(nDARs, aes(reorder(method, nDARs), nDARs)) + geom_col(fill="darkblu
 ## Assembly
 
 ```{r, fig.width=10, fig.height=6}
-pdf("Figure_betterChromVAR.pdf", width=10, height=6)
+pdf("Figure_betterChromVAR.pdf", width=10, height=6.3)
 plot_grid(
   plot_grid( p1, p2, labels="AUTO", scale=0.95, rel_widths=c(3,2)),
   plot_grid(grid.grabExpr(draw(h, heatmap_legend_side="bottom")),
             p4 + theme(axis.title.x=element_text(size=10)) + coord_flip(),
             scale=0.95, rel_widths = c(3.3,1), labels=LETTERS[3:4]),
-  nrow=2
+  nrow=2, rel_heights = c(3,3.3)
 )
 dev.off()
 ```
