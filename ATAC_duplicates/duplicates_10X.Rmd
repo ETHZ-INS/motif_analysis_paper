@@ -1,0 +1,169 @@
+---
+title: "ATAC dups"
+output: html_document
+date: "2026-03-30"
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(rtracklayer)
+  library(GenomicRanges)
+  library(epiwraps)
+  library(BSgenome.Mmusculus.UCSC.mm10)
+  library(BiocParallel)
+  library(dplyr)
+  library(ggplot2)
+  library(patchwork)
+})
+```
+
+```{r, eval=FALSE}
+download.file("https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSM8853595&format=file&file=GSM8853595%5Fsample%5F1%2Efragments%2Etsv%2Egz",
+              "10x_sample_1.tsv.gz")
+Rsamtools::indexTabix("10x_sample_1.tsv.gz", format="bed")
+download.file("https://ftp.ncbi.nlm.nih.gov/geo/series/GSE292nnn/GSE292239/suppl/GSE292239%5FscMultiome%5FcellAnnotation%2Ecsv%2Egz",
+              "annotation.csv.gz")
+```
+
+
+```{r, eval=TRUE}
+bp <- MulticoreParam(3)
+
+fragInfo <- function(x){
+  data.frame(width=width(x), isDup=x$score>1L,
+             gc=letterFrequency(getSeq(BSgenome.Mmusculus.UCSC.mm10, x),
+                                letters="GC", as.prob=TRUE)[,1])
+}
+
+frags <- "/mnt/bohacek/internData/2024_waag_CRS_scMultiome/cellranger/sample_1_trimmed49_imp_rev/outs/atac_fragments.tsv.gz"
+a <- tabixChrApply(frags, keepSeqLvls=c("chr1","chr2","chr3"), BPPARAM=bp, fn=fragInfo)
+d <- do.call(rbind, a)
+d$sample <- "Sample 1"
+frags <- "/mnt/bohacek/internData/2024_waag_CRS_scMultiome/cellranger/sample_2_trimmed49_imp_rev/outs/atac_fragments.tsv.gz"
+a <- tabixChrApply(frags, keepSeqLvls=c("chr1","chr2","chr3"), BPPARAM=bp, fn=fragInfo)
+d2 <- do.call(rbind, a)
+d2$sample <- "Sample 2"
+d <- rbind(d,d2)
+d$sample <- factor(d$sample)
+d <- d[which(d$width<=2000L),]
+d$width.bin <- cut(d$width, breaks=c(0,60,150,300,Inf))
+
+gc_dens <- dplyr::bind_rows(bplapply(split(d, paste(d$width.bin, d$isDup, d$sample)),
+                                   BPPARAM=bp, function(x){
+  res <- density(x$gc, bw=0.05)
+  data.frame(x = res$x, y = res$y, width.bin=x$width.bin[1], sample=x$sample[1], isDup=x$isDup[1])
+}))
+
+gc_dens_global <- dplyr::bind_rows(bplapply(split(d, paste(d$isDup, d$sample)),
+                                   BPPARAM=bp, function(x){
+  res <- density(x$gc, bw=0.05)
+  data.frame(x = res$x, y = res$y, sample=x$sample[1], isDup=x$isDup[1])
+}))
+
+
+w_dens <- dplyr::bind_rows(bplapply(split(d, paste(d$isDup, d$sample)),
+                                   BPPARAM=bp, function(x){
+  res <- density(x$width, bw=5)
+  data.frame(x = res$x, y = res$y, sample=x$sample[1], isDup=x$isDup[1])
+}))
+
+save(gc_dens, gc_dens_global, w_dens, file="duplicates_10x.RData")
+```
+
+```{r}
+load("duplicates_10x.RData")
+```
+
+
+```{r}
+p1 <- ggplot(gc_dens_global, aes(x = x, y = y, linetype=isDup)) +
+    geom_line(position="identity", linewidth=1) + theme_bw() +
+  labs(x="GC content", y="density", linetype="Duplicated", tag="A") + 
+  facet_wrap(~sample, nrow=2)
+
+p2 <- ggplot(w_dens, aes(x = x, y = y, linetype=isDup)) +
+    geom_line(position="identity", linewidth=1) + theme_bw() +
+  scale_x_sqrt(limit=c(0,1000), breaks=c(0,100,300,1000)) +
+  labs(x="Width", y="density", linetype="Duplicated", tag="B") + 
+  facet_wrap(~sample, nrow=2, scale="free_y")
+
+p3 <- ggplot(gc_dens, aes(x = x, y = y, colour=width.bin, linetype=isDup)) +
+    geom_line(position="identity", linewidth=1) + theme_bw() +
+  labs(x="GC content", y="density", linetype="Duplicated", tag="C",
+       color="Fragment\nwidth") + facet_wrap(~sample, nrow=2)
+```
+
+
+```{r, fig.width=10, fig.height=5}
+p1 + p2 + p3 + plot_layout(guides="collect", widths=c(1,1,2)) & 
+  theme(legend.position = "bottom", plot.tag = element_text(face="bold"))
+```
+
+
+
+# Comparison across celltypes
+
+```{r}
+m <- read.delim("annotation.csv.gz", row.names=1)
+m <- m[grep("^S1\\.", row.names(m)),]
+m$broadClass <- as.integer(grepl("ExN|InhN", m$celltype)) + 
+  10*grepl("OPC|oligodendrocyte|COP", m$celltype) + 100*grepl("microglia", m$celltype)
+m$broadClass <- factor(m$broadClass, c(0,1,10,100), c("other", "neurons", "oligodendrocytes", "microglia"))
+bc2type <- setNames(m$broadClass, m$Barcode)
+a <- tabixChrApply("10x_sample_1.tsv.gz", keepSeqLvls=c("chr3"), BPPARAM=bp, fn=identity)[[1]]
+a$type <- bc2type[as.character(a$name)]
+a2 <- a[which(!is.na(a$type) & width(a)<=2000L)]
+nCells <- sapply(split(a2, a2$type), \(x) length(unique(as.character(x$name))))
+d <- data.frame(width=width(a2), gc=letterFrequency(getSeq(BSgenome.Mmusculus.UCSC.mm10, a2), letters="GC", as.prob=TRUE)[,1], type=a2$type)
+d$width.bin <- cut(d$width, breaks=c(0,60,150,300,Inf))
+d$isDup <- a2$score>1L
+tt <- table(d$type, d$isDup)
+meanLibSize <- rowSums(tt)/nCells
+
+gc_dens_global <- dplyr::bind_rows(bplapply(split(d, paste(d$type)),
+                                   BPPARAM=bp, function(x){
+  res <- density(x$gc, bw = 0.05)
+  data.frame(x = res$x, y = res$y, celltype=x$type[1], meanLibSize=meanLibSize[x$type[[1]]])
+}))
+
+
+w_dens <- dplyr::bind_rows(bplapply(split(d, paste(d$type)),
+                                   BPPARAM=bp, function(x){
+  res <- density(x$width, bw = 5)
+  data.frame(x = res$x, y = res$y, celltype=x$type[1], meanLibSize=meanLibSize[x$type[[1]]])
+}))
+
+save(gc_dens_global, w_dens, file="10x_celltypes.RData")
+```
+
+
+```{r, fig.width=10, fig.height=4}
+p1 <- ggplot(gc_dens_global, aes(x = x, y = y, linetype=celltype, colour=celltype)) +
+    geom_line(position="identity", linewidth=1) + theme_bw() +
+  labs(x="GC content", y="density", tag="A")
+
+p2 <- ggplot(w_dens, aes(x = x, y = y, linetype=celltype, colour=celltype)) +
+    geom_line(position="identity", linewidth=1) + theme_bw() +
+  scale_x_sqrt(limit=c(0,1000), breaks=c(0,100,300,1000)) +
+  labs(x="Width", y="density", tag="B")
+
+p1 + p2 + plot_layout(guides="collect")
+```
+
+
+
+
+
+```{r, eval=FALSE}
+pb.nn <- readRDS("/mnt/bohacek/work/plger/CRS/scMultiome/ATAC/pbNonNr_resized.rds")
+pb.ne <- readRDS("/mnt/bohacek/work/plger/CRS/scMultiome/ATAC/pbNr_resized.rds")
+row.names(pb.nn) <- as.character(granges(pb.nn))
+row.names(pb.ne) <- as.character(granges(pb.ne))
+i <- intersect(row.names(pb.nn), row.names(pb.ne))
+pb.nn <- pb.nn[i,]
+pb.ne <- pb.ne[i,]
+peakCounts <- data.frame(row.names=i, neurons=rowSums(assay(pb.ne)), nonNeuronal=rowSums(assay(pb.nn)))
+saveRDS(peakCounts, file="10x_neuronalVsNot_peakCounts.rds")
+```
+
+

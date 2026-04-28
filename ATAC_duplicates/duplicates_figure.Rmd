@@ -1,0 +1,69 @@
+---
+title: "ATAC dups"
+output: html_document
+date: "2026-03-30"
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(patchwork)
+})
+```
+
+```{r}
+load("duplicates_10x.RData", verbose=TRUE)
+gc_dens1 <- gc_dens; gc_dens_global1 <- gc_dens_global; w_dens1 <- w_dens
+load("duplicates_sciATACseq3.RData")
+gc_dens <- rbind(gc_dens, gc_dens1)
+gc_dens_global <- rbind(gc_dens_global, gc_dens_global1)
+w_dens <- rbind(w_dens, w_dens1)
+levels(gc_dens_global$sample) <- levels(w_dens$sample) <- levels(gc_dens$sample) <- 
+  c("sci-ATAC-seq3", "10X (sample 1)", "10X (sample 2)")
+```
+
+
+```{r}
+p1 <- ggplot(gc_dens_global, aes(x = x, y = y, linetype=isDup)) +
+    geom_line(position="identity", linewidth=1) + theme_bw() +
+  labs(x="GC content", y="density", linetype="Duplicated", tag="A") + 
+  facet_wrap(~sample, nrow=3)
+
+p2 <- ggplot(w_dens, aes(x = x, y = y, linetype=isDup)) +
+    geom_line(position="identity", linewidth=1) + theme_bw() +
+  scale_x_sqrt(limit=c(0,1000), breaks=c(0,100,300,1000)) +
+  labs(x="Width", y="density", linetype="Duplicated", tag="B") + 
+  facet_wrap(~sample, nrow=3, scale="free_y")
+
+p3 <- ggplot(gc_dens, aes(x = x, y = y, colour=width.bin, linetype=isDup)) +
+    geom_line(position="identity", linewidth=1) + theme_bw() +
+  labs(x="GC content", y="density", linetype="Duplicated", tag="C",
+       color="Fragment\nwidth") + facet_wrap(~sample, nrow=3)
+```
+
+
+```{r}
+load("10x_celltypes.RData")
+
+p4 <- ggplot(gc_dens_global, aes(x = x, y = y, linetype=celltype, colour=celltype)) +
+    geom_line(position="identity", linewidth=1) + theme_bw() +
+  labs(x="GC content", y="density", tag="D")
+
+p5 <- ggplot(w_dens, aes(x = x, y = y, linetype=celltype, colour=celltype)) +
+    geom_line(position="identity", linewidth=1) + theme_bw() +
+  scale_x_sqrt(limit=c(0,1000), breaks=c(0,100,300,1000)) +
+  labs(x="Width", y="density")
+```
+
+
+```{r, fig.width=10, fig.height=10}
+pdf("Figure_ATAC_dups.pdf", width=10, height=7)
+cowplot::plot_grid(
+  p1 + p2 + p3 + plot_layout(guides="collect", widths=c(1,1,2)) & 
+  theme(legend.position = "bottom", plot.tag = element_text(face="bold")),
+  (p4 + p5 + plot_layout(guides="collect")),
+  nrow=2, rel_heights=c(3, 1)
+)
+dev.off()
+```
+
