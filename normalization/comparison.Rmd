@@ -58,16 +58,20 @@ ss <- row.names(sechm::sortRows(norms[[1]]))
 saveRDS(ss, file="Cusanovich_sampleOrder.rds")
 cc <- do.call(cbind, lapply(norms, \(x) x[ss,ss]))
 method <- factor(rep(names(norms),each=ncol(se)), names(norms))
-#df <- colData(se)[row.names(cc),]
+df <- colData(se)[row.names(cc),c("Nuclei","Temperature","Buffer")]
+df$Buffer <- gsub("_TD","",df$Buffer)
 
 coltitles <- as.expression(lapply(names(norms), function(x) {
   y <- norms[[x]]
   avg_rho <- round(mean(y[lower.tri(y)]), 2)
   bquote(atop(.(x), bar(rho) == .(avg_rho)))
 }))
+cols <- list(Temperature=c("37C"="#56B4E9", "55C"="#E69F00"),
+             Buffer=c(THS="#F0E442", Omni="#0072B2", Nextera="#D55E00"),
+             Nuclei=c(Native="#009E73", Fixed="#CC79A7"))
+rowAnno <- rowAnnotation(df=df, col=cols, annotation_name_side="top", annotation_name_gp=gpar(fontsize=10))
 
-
-Heatmap(cc, cluster_columns=FALSE, cluster_rows=FALSE, #right_annotation = rowAnnotation(df=df),
+Heatmap(cc, cluster_columns=FALSE, cluster_rows=FALSE, left_annotation = rowAnno,
         column_split = method, column_title=coltitles, name="Pearson\ncorrelation",
         show_row_names = FALSE, show_column_names = FALSE)
 

@@ -9,6 +9,7 @@ rule all:
         "results/original.rds",
         "results/ArchR.rds",
         "results/betterChromVAR.rds",
+	"results/betterChromVARkNN.rds",
 	"results/scan_only.rds"
 
 rule archr_prepare:
@@ -31,4 +32,4 @@ rule run_chromvar_benchmark:
         genome = GENOME
     threads: THREADS
     benchmark: "benchmarks/chromVAR_{method}.txt"
-    script: "scripts/run_chromvar.R"
+    script: "scripts/run_{wildcards.method}.R"

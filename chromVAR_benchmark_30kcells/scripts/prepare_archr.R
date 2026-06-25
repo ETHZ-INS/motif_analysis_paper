@@ -12,10 +12,6 @@ sample_name <- "benchmark_sample"
 
 if(!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
 
-# Since we can't easily run the archr implementation, we'll have to create an
-# archr project with arrow files and all... to this end, we first generate
-# fragments from the count matrix:
-
 # 2. Fast Pseudo-Fragment Creation
 rse <- readRDS(input_path)
 peaks <- rowRanges(rse)

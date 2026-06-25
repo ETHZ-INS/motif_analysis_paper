@@ -12,6 +12,7 @@ suppressPackageStartupMessages({
   library(BiocParallel)
   library(patchwork)
   library(ggplot2)
+  library(edgeR)
 })
 ```
 
@@ -62,7 +63,7 @@ p1 <- ggplot(gc_dens, aes(x = x, y = y, color=sample)) +
 p2 <- ggplot(wi_dens, aes(x = x, y = y, color=sample)) +
     geom_line(position="identity", linewidth=1) + theme_bw() +
   scale_x_sqrt(limit=c(0,1000), breaks=c(0,100,300,1000)) +
-  labs(x="Width", y="density", title="B: Length bias")
+  labs(x="Fragment length", y="density", title="B: Length bias")
 ```
 
 
@@ -70,9 +71,9 @@ p2 <- ggplot(wi_dens, aes(x = x, y = y, color=sample)) +
 se <- readRDS("/mnt/germain/datasets/CusanovichATACprotocols/mergedPeaks_SE.rds")
 dd <- rbind(
   data.frame(M=rowMeans(assay(se)), A=log1p(assay(se)[,samps[4]])-log1p(assay(se)[,samps[3]]),
-             comparison="Native.55C vs Native.37C"),
-  data.frame(M=rowMeans(assay(se)), A=log1p(assay(se)[,3])-log1p(assay(se)[,2]),
-             comparison="Native.37C, THS vs Nextera Buffer"))
+             comparison="Native.55C vs Native.37C") )
+  # data.frame(M=rowMeans(assay(se)), A=log1p(assay(se)[,3])-log1p(assay(se)[,2]),
+  #            comparison="Native.37C, THS vs Nextera Buffer"))
   
 p3 <- ggplot(dd, aes(M, A)) + geom_hex(bins=c(70,15)) + scale_x_log10(limits=c(1,1000)) +
     geom_smooth(method="gam") + scale_fill_gradient(low="lightgrey", high="darkred") + 
@@ -80,12 +81,27 @@ p3 <- ggplot(dd, aes(M, A)) + geom_hex(bins=c(70,15)) + scale_x_log10(limits=c(1
     facet_wrap(~comparison, nrow=2, scale="free_y") + theme_bw()
 ```
 
+```{r}
+assay(se, "norm") <- cpm(calcNormFactors(DGEList(assay(se))))
+d <- sechm::meltSE(se[,samps], row.names(se), colDat.columns = NA)
+d$mean <- rowMeans(assay(se,"norm"))
+p3b <- ggplot(d, aes(mean, log2((norm+.5)/(mean+.5)), colour=sample, group=sample)) + 
+  geom_hline(yintercept=0, linetype="dashed") + 
+  geom_smooth(method = "gam", alpha = 0.2, color = NA) +
+  geom_line(stat = "smooth", method = "gam", linewidth = 1, alpha = 1) +
+  scale_x_log10(limits=c(1,1000)) + theme_bw() +
+  theme(legend.position="none") + 
+  labs(y="log2 enrichment over mean", x="Mean accessibility")
+```
+
+
 
 ```{r, fig.width=10, fig.height=5}
-pdf("example_bias.pdf", width=10, height=5)
 p12 <- (p2 + p1 + plot_layout(nrow=1, guides="collect") & 
           guides(color = guide_legend(nrow = 2)) & theme(legend.position = "bottom"))
-(p3 + theme(legend.position = "bottom")) + p12 + plot_layout(nrow=1, widths=c(4,6))
+
+pdf("example_bias.pdf", width=10, height=5)
+cowplot::plot_grid((p3/free(p3b)), p12, rel_widths=c(4,6))
 dev.off()
 ```
 
