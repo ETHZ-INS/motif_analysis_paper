@@ -1,0 +1,80 @@
+---
+title: "sc_knn_variants"
+output: html_document
+date: "2026-07-04"
+---
+
+
+```{r}
+suppressPackageStartupMessages({
+  library(SummarizedExperiment)
+  library(Matrix)
+  library(dplyr)
+  library(betterChromVAR)
+  library(BSgenome.Hsapiens.UCSC.hg38)
+  library(ggplot2)
+})
+```
+
+```{r, eval=FALSE}
+se <- readRDS("GSE168851_scATAC_K562_TimeCourse_Peak_Matrix_SE.rds")
+se <- betterChromVAR::addGCBias(se, genome=BSgenome.Hsapiens.UCSC.hg38)
+se <- se[,which(se$sgAssignFinal!="UNK")]
+se$target <- gsub("sg","",(se$sgAssignFinal))
+assayNames(se) <- "counts"
+mx <- readRDS("GSE168851_motif_ix.SE.rds")
+
+knnWrap <- function(se, mx, weights="none", l=1L){
+  bg <- getBackgroundKNN(se, weights=weights)
+  computeDeviationsFromKNN(se, bg, mx, l=l, chunkSize=2000)
+}
+se.list <- list(
+  normal=betterChromVAR(se, mx),
+  knnBasic=knnWrap(se, mx),
+  knnWeight=knnWrap(se, mx, weights="linear"),
+  knnFull=knnWrap(se, mx, weights="linear", l=0.1)
+)
+saveRDS(se.list, file="sc_knn_variants.SEs.rds")
+```
+
+```{r}
+se.list <- readRDS(file="sc_knn_variants.SEs.rds")
+res <- dplyr::bind_rows(lapply(se.list, \(se){
+  si <- split(seq_len(ncol(se)), se$sgAssign2)
+  dplyr::bind_rows(lapply(si, \(i){
+    z <- assay(se,"z")[,i]
+    d <- assay(se,"deviations")[,i]
+    tres <- list(z.cor=cor(z, rowMeans(z)),
+                 z.var=rowVars(z),
+                 d.cor=cor(d, rowMeans(d)),
+                 d.var=rowVars(d))
+    data.frame(assay=rep(c("z-scores","deviations"), each=2),
+               variable=rep(c("ICC","variance"),2),
+               value=sapply(tres, mean))
+  }), .id="sgRNA")
+}), .id="variant")
+res$variant <- factor(res$variant, c("normal", "knnBasic", "knnWeight", "knnFull"),
+                      c("bin-based", "kNN-based", "kNN+\nweights", "knn+\nweights+\nbgMask"))
+res$combined <- paste(res$variable," of ",res$assay)
+res$diff <- res$value-res$value[which(res$variant=="bin-based")]
+
+getStars <- function(y) {
+  p_val <- t.test(y, mu = 0)$p.value
+  stars <- ifelse(p_val < 0.001, "***",
+            ifelse(p_val < 0.01, "**",
+             ifelse(p_val < 0.05, "*", "ns")))
+  se <- sd(y) / sqrt(length(y))
+  mean_val <- mean(y)
+  return(data.frame(
+    y = mean_val + pmax(se,0.0002) + (max(abs(y)) * 0.05),
+    label = stars
+  ))
+}
+
+ggplot(res[which(res$variant!="bin-based"),], aes(variant, diff)) + 
+  geom_hline(yintercept=0, linetype="dashed") + theme_bw() + stat_summary() +
+  facet_wrap(~combined, scale="free") +
+  labs(x="betterChromVAR-kNN variant", y="Difference to bin-based betterChromVAR") +
+  stat_summary(fun.data = getStars, geom = "text", fontface = "bold")
+ggsave("binVSkNN.pdf", width=10, height=5)
+```
