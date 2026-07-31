@@ -47,6 +47,7 @@ d <- rbind(d,d2)
 d$sample <- factor(d$sample)
 d <- d[which(d$width<=2000L),]
 d$width.bin <- cut(d$width, breaks=c(0,60,150,300,Inf))
+saveRDS(d, file="fragInfo_10X.rds")
 
 gc_dens <- dplyr::bind_rows(bplapply(split(d, paste(d$width.bin, d$isDup, d$sample)),
                                    BPPARAM=bp, function(x){
@@ -68,14 +69,42 @@ w_dens <- dplyr::bind_rows(bplapply(split(d, paste(d$isDup, d$sample)),
 }))
 
 save(gc_dens, gc_dens_global, w_dens, file="duplicates_10x.RData")
+
 ```
+
+
+```{r}
+d <- readRDS("fragInfo_10X.rds")
+d$category <- factor(d$isDup)
+set.seed(123)
+d2 <- dplyr::bind_rows(lapply(split(d, paste(d$width.bin, d$isDup)), \(x){
+  w <- sample.int(nrow(x), 50000)
+  x[w,]
+}))
+modf <- gam(gc ~ s(width, by=category), data=d2, sp=c(0.5,0.5))
+
+newdat <- expand.grid(
+  width = seq(min(d$width), max(d$width)),
+  category = levels(d$category)
+)
+
+pred <- predict(modf, newdata = newdat, se.fit = TRUE)
+newdat$fit <- pred$fit
+newdat$lwr <- pred$fit - 1.96 * pred$se.fit
+newdat$upr <- pred$fit + 1.96 * pred$se.fit
+saveRDS(newdat, file="gamPreds_10X.rds")
+
+ggplot(newdat, aes(x = width, y = fit, color = category)) +
+  geom_ribbon(aes(y = fit, ymin = lwr, ymax = upr, fill = category),
+              alpha = 0.15, color = NA) +
+  geom_line(linewidth = 1) +
+  labs(x = "length", y = "gc") +
+  theme_bw() + coord_cartesian(ylim=c(0.25, 0.75)) + scale_x_sqrt()
+```
+
 
 ```{r}
 load("duplicates_10x.RData")
-```
-
-
-```{r}
 p1 <- ggplot(gc_dens_global, aes(x = x, y = y, linetype=isDup)) +
     geom_line(position="identity", linewidth=1) + theme_bw() +
   labs(x="GC content", y="density", linetype="Duplicated", tag="A") + 
