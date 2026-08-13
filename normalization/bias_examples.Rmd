@@ -19,6 +19,8 @@ suppressPackageStartupMessages({
 ```{r}
 samps <- c(Fixed.37C = "SRX10861478.GSM5290898", Fixed.55C = "SRX10861481.GSM5290901",
            Native.37C = "SRX10861426.GSM5290846", Native.55C = "SRX10861421.GSM5290841")
+newNames <- setNames(paste0(names(samps),".",gsub(".+\\.","",samps)), samps)
+cols <- setNames(c("#F8766D", "#00BA38", "#619CFF", "#B77FDB"), newNames)
 ```
 
 ```{r, eval=FALSE}
@@ -48,7 +50,6 @@ wi_dens <- dplyr::bind_rows(bplapply(split(d$width, d$sample),
   data.frame(x = res$x^2, y = res$y)
 }), .id="sample")
 
-newNames <- setNames(paste0(names(samps),".",gsub(".+\\.","",samps)), names(samps))
 gc_dens$sample <- factor(gc_dens$sample, names(newNames), newNames)
 wi_dens$sample <- factor(wi_dens$sample, names(newNames), newNames)
 save(gc_dens, wi_dens, file="example_bias.RData")
@@ -58,23 +59,26 @@ save(gc_dens, wi_dens, file="example_bias.RData")
 load("example_bias.RData")
 p1 <- ggplot(gc_dens, aes(x = x, y = y, color=sample)) +
     geom_line(position="identity", linewidth=1) + theme_bw() +
-  labs(x="GC content", y="density", title="C: GC bias")
+  labs(x="GC content", y="density", title="C: GC bias") +
+  scale_color_manual(values=cols)
 
 p2 <- ggplot(wi_dens, aes(x = x, y = y, color=sample)) +
     geom_line(position="identity", linewidth=1) + theme_bw() +
   scale_x_sqrt(limit=c(0,1000), breaks=c(0,100,300,1000)) +
-  labs(x="Fragment length", y="density", title="B: Length bias")
+  labs(x="Fragment length", y="density", title="B: Length bias") +
+  scale_color_manual(values=cols)
 ```
 
 
 ```{r}
 se <- readRDS("/mnt/germain/datasets/CusanovichATACprotocols/mergedPeaks_SE.rds")
+assay(se, "norm") <- edgeR::cpm(calcNormFactors(DGEList(assay(se))))
+# se <- se[-59150,]
+# se <- betterChromVAR::addGCBias(se, Rsamtools::FaFile("/reference/Homo_sapiens/Ensembl/GRCh38.p10/Sequence/WholeGenomeFasta/Homo_sapiens.GRCh38.dna.toplevel.fa")) 
 dd <- rbind(
-  data.frame(M=rowMeans(assay(se)), A=log1p(assay(se)[,samps[4]])-log1p(assay(se)[,samps[3]]),
+  data.frame(M=rowMeans(assay(se, "norm")), A=log(assay(se, "norm")[,samps[4]])-log(assay(se, "norm")[,samps[3]]),
              comparison="Native.55C vs Native.37C") )
-  # data.frame(M=rowMeans(assay(se)), A=log1p(assay(se)[,3])-log1p(assay(se)[,2]),
-  #            comparison="Native.37C, THS vs Nextera Buffer"))
-  
+#dd$GC <- rowData(se)$bias  
 p3 <- ggplot(dd, aes(M, A)) + geom_hex(bins=c(70,15)) + scale_x_log10(limits=c(1,1000)) +
     geom_smooth(method="gam") + scale_fill_gradient(low="lightgrey", high="darkred") + 
     labs(x="Mean accessibility", y="Log-foldchange", title="A: Enrichment bias") + 
@@ -82,16 +86,18 @@ p3 <- ggplot(dd, aes(M, A)) + geom_hex(bins=c(70,15)) + scale_x_log10(limits=c(1
 ```
 
 ```{r}
-assay(se, "norm") <- cpm(calcNormFactors(DGEList(assay(se))))
 d <- sechm::meltSE(se[,samps], row.names(se), colDat.columns = NA)
+d$sample <- factor(newNames[d$sample], newNames)
 d$mean <- rowMeans(assay(se,"norm"))
-p3b <- ggplot(d, aes(mean, log2((norm+.5)/(mean+.5)), colour=sample, group=sample)) + 
-  geom_hline(yintercept=0, linetype="dashed") + 
-  geom_smooth(method = "gam", alpha = 0.2, color = NA) +
+d$ref <- assay(se,"norm")[,samps[["Native.37C"]]]
+p3b <- ggplot(d, aes(mean, log((norm+.1)/(ref+.1)), colour=sample, group=sample)) + 
+  geom_hline(yintercept=0, linewidth=1, colour="#619CFF") + 
+  geom_smooth(method = "gam", alpha = 0.2, color = NA, formula=y~s(x, sp=0.1)) +
   geom_line(stat = "smooth", method = "gam", linewidth = 1, alpha = 1) +
-  scale_x_log10(limits=c(1,1000)) + theme_bw() +
+  scale_x_log10(limits=c(1,1000), exp=0) + theme_bw() +
   theme(legend.position="none") + 
-  labs(y="log2 enrichment over mean", x="Mean accessibility")
+  scale_color_manual(values=cols) +
+  labs(y="Log-foldchange\nagainst Native.37C", x="Mean accessibility")
 ```
 
 
@@ -103,5 +109,12 @@ p12 <- (p2 + p1 + plot_layout(nrow=1, guides="collect") &
 pdf("example_bias.pdf", width=10, height=5)
 cowplot::plot_grid((p3/free(p3b)), p12, rel_widths=c(4,6))
 dev.off()
+```
+
+```{r, fig.width=10, fig.height=3}
+a <- (p3 + theme(legend.position = "none"))
+b <- (p2 + xlim(c(20,1000)))
+c <- (p1 + xlim(c(0.15,0.9)))
+a + b + c + plot_layout(nrow=1, widths=c(4,3,3)) & theme(legend.position = "none")
 ```
 
