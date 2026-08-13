@@ -35,7 +35,8 @@ d[["Running time (min)"]] <- (d$s-d$s[5])/60
 d[["Max memory (MiB)"]] <- d$max_rss
 d <- d[c(4,1,2,3), c(1, ncol(d)-(0:1))]
 d <- reshape2::melt(d, id.vars="method")
-d$method <- factor(d$method, rev(c("original", "ArchR", "betterChromVAR", "kNN-betterChromVAR")))
+d$method <- factor(d$method, rev(c("original", "ArchR", "betterChromVAR", "betterChromVARkNN")))
+levels(d$method)[1] <- "kNN-betterChromVAR"
 p2 <- ggplot(d, aes(method, value)) + geom_col(fill="darkblue") + 
   xlab(NULL) + coord_flip() + facet_wrap(~variable, scale="free", nrow=2) 
 ```
