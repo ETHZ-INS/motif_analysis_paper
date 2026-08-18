@@ -1,4 +1,4 @@
-# setwd("~/motif_analysis_paper/WeightInsertModels/benchmark")
+# setwd("~/motif_analysis_paper/weightedMotifAccess/benchmark")
 # args <- list(list.files("outs/dat", "^dif-.*", full.names=TRUE), "plts/dif-rankHM.pdf")
 suppressPackageStartupMessages({
     library(ggplot2)

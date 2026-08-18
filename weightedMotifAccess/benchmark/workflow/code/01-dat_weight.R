@@ -2,8 +2,8 @@ suppressPackageStartupMessages({
     library(data.table)
     library(GenomicRanges)
     library(SummarizedExperiment)
-    #remotes::install_github("Jiayi-Wang-Joey/WeightInsertModels")
-    library(WeightInsertModels)
+    #remotes::install_github("Jiayi-Wang-Joey/weightedMotifAccess")
+    library(weightedMotifAccess)
     library(BSgenome.Hsapiens.UCSC.hg38)
     library(BSgenome.Mmusculus.UCSC.mm10)
     library(rtracklayer)
@@ -21,7 +21,7 @@ if (spec == "Hsapiens") {
     species <- "Mus_musculus"
 }
 
-se <- WeightInsertModels::getWeightedCounts(atacFrag = atacFrag,
+se <- weightedMotifAccess::getWeightedCounts(atacFrag = atacFrag,
     ranges = peaks,
     genome = genome,
     species = species,

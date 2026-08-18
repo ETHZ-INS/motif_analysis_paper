@@ -2,7 +2,7 @@ suppressPackageStartupMessages({
     library(data.table)
     library(GenomicRanges)
     library(SummarizedExperiment)
-    library(WeightInsertModels)
+    library(weightedMotifAccess)
     library(BSgenome.Hsapiens.UCSC.hg38)
     library(BSgenome.Mmusculus.UCSC.mm10)
     library(rtracklayer)
@@ -56,7 +56,7 @@ motifRanges <- subsetByOverlaps(motifRanges, peakRanges)
 shift <- fifelse(m %in% c("GATA1", "GATA2", "MYC", "KLF1", "RUNX1", "RUNX2"),
     FALSE, TRUE)
 
-res <- WeightInsertModels::weightedInsertions(lst, peakRanges,
+res <- weightedMotifAccess::weightedInsertions(lst, peakRanges,
     motifRanges, ncores=1, shift=shift)
 pc <- res$peakCounts
 seqlevelsStyle(pc) <- "UCSC"

@@ -15,8 +15,8 @@ author: Jiayi Wang
 ```{r message=FALSE, warning=FALSE}
 suppressPackageStartupMessages({
     library(ggplot2)
-   #remotes::install_github("Jiayi-Wang-Joey/WeightInsertModels")
-    library(WeightInsertModels)
+   #remotes::install_github("Jiayi-Wang-Joey/weightedMotifAccess")
+    library(weightedMotifAccess)
     library(SummarizedExperiment)
     library(Matrix)
     library(limma)
@@ -36,64 +36,6 @@ mtx <- as.matrix(counts(se))
 cor_mat <- cor(mtx, method = "spearman", use = "pairwise.complete.obs")
 dt <- as.data.table(as.table(cor_mat))
 ```
-
-```{r}
-# setnames(dt, c("sample1", "sample2", "cor"))
-# low_samples  <- paste0("GSM529088", 1:6)
-# high_samples <- c(paste0("GSM529088", 7:9), paste0("GSM529089", 0:2))
-# 
-# all_samples <- colnames(cor_mat)
-# 
-# label_dt <- data.table(
-#   sample = all_samples,
-#   group = fifelse(
-#     all_samples %in% low_samples, "low",
-#     fifelse(all_samples %in% high_samples, "high", "other")
-#   )
-# )
-# se2 <- readRDS("/mnt/germain/datasets/CusanovichATACprotocols/mergedPeaks_SE2.rds")
-# order <- substr(colnames(se2), 13, 22)
-# dt[, sample1 := factor(sample1, levels = order)]
-# dt[, sample2 := factor(sample2, levels = order)]
-# gg <- ggplot(dt, aes(sample1, sample2, fill = cor)) +
-#   geom_tile() +
-#   scale_fill_viridis_c(limits = c(0, 1)) +
-#   theme_void() +
-#   theme(
-#     axis.text = element_blank(),
-#     axis.title = element_blank(),
-#       axis.ticks = element_blank(),
-#     legend.key.height = unit(0.4, "cm"),
-#     legend.text  = element_text(size = 6),
-#     legend.title = element_text(size = 7),
-#     plot.margin = margin(t = 20, r = 10, b = 60, l = 60),
-#       coord_equal()
-#   ) +
-#   geom_text(
-#     data = label_dt,
-#     aes(x = sample, y = 0, label = sample, color = group),
-#     angle = 90, hjust = 1, size = 0.8, inherit.aes = FALSE
-#   ) +
-#   geom_text(
-#     data = label_dt,
-#     aes(x = 0, y = sample, label = sample, color = group),
-#     hjust = 1, size = 0.8, inherit.aes = FALSE
-#   ) +
-#   scale_color_manual(
-#     values = c(
-#       "low" = "#1f78b4",    
-#       "high" = "#e31a1c",  
-#       "other" = "grey"
-#     )
-#   ) +
-#   guides(color = "none") +
-#   labs(fill = "Spearman \nCorrelation") +
-#   coord_cartesian(clip = "off") +
-#   expand_limits(x = 0, y = 2)
-# ggsave("plts/cusanovich_heatmap.pdf", gg, height = 15, width = 15, units = "cm")
-```
-
-
 
 ## MA plot
 
@@ -135,7 +77,7 @@ bams <-  bams[rownames(pk)]
 atacFrags <- .importFragments(as.list(bams))
 
 peaks <- import.bed(con="/mnt/plger/datasets/CusanovichATACprotocols/peaks/merged.bed")
-se2 <- WeightInsertModels::getCounts(atacFrag = atacFrags, ranges = peaks,
+se2 <- weightedMotifAccess::getCounts(atacFrag = atacFrags, ranges = peaks,
                     genome = BSgenome.Hsapiens.UCSC.hg38,
                     species = "Homo sapiens",
                     fragWeight=TRUE, peakWeight=TRUE)
