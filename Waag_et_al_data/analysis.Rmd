@@ -1,0 +1,153 @@
+---
+title: "Comparison of normalization"
+output: html_document
+date: "2026-10-13"
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(SummarizedExperiment)
+  library(betterChromVAR)
+  library(edgeR)
+  library(BiocParallel)
+  library(MotifDb)
+  library(TFBSTools)
+  library(universalmotif)
+  library(memes)
+  library(BSgenome.Mmusculus.UCSC.mm10)
+  library(qsmooth)
+  library(Hmisc)
+  library(GenomeInfoDb)
+})
+verbose <- FALSE
+source("https://raw.githubusercontent.com/ETHZ-INS/DTFAB/refs/heads/main/Scripts/GCnorm.R")
+counts <- function(se) assay(se,"counts")
+```
+
+```{r, eval=FALSE}
+bse <- readRDS("bulkATAC.SE.rds")
+bse <- bse[rowSums(assay(bse))>0,]
+assay(bse, "GCQN") <- GCQuantileNorm(bse)
+assay(bse, "GCsmQN") <- GCSmoothQuantile(bse, bio="Group")
+bse <- CVnorm(bse)
+assay(bse, "CVnorm") <- assay(bse, "corrected")
+bse <- CVnorm(bse, grouping = bse$Group)
+assayNames(bse) <- gsub("^corrected$", "smCVnorm", assayNames(bse))
+bse <- CVnorm(bse, grouping = bse$rndGroup, shrinkMode="qsmooth")
+assayNames(bse) <- gsub("^corrected$", "qsmCVnorm", assayNames(bse))
+
+mm <- model.matrix(~Sex+Group, data=as.data.frame(colData(bse)))
+bse <- bse[filterByExpr(as.matrix(assay(bse)), mm),]
+doAna <- function(a, mm){
+  a <- a[which(rowSums(is.na(a))==0),]
+  dge <- calcNormFactors(DGEList(a))
+  dge <- estimateDisp(dge, mm)
+  fit <- glmFit(dge, mm)
+  as.data.frame(topTags(glmLRT(fit, "Group45min"), Inf))
+}
+
+res <- bplapply(assays(bse), BPPARAM=MulticoreParam(length(assays(bse)), progress=verbose), mm=mm, FUN=doAna)
+saveRDS(res, file="Waag_results.rds")
+nDARs <- dplyr::bind_rows(lapply(res, \(x) data.frame(nDARs=sum(x$FDR<0.05))), .id="method")
+
+bse$stratum <- interaction(bse$Sex, bse$Group, drop=TRUE)
+
+runOnePerm <- function(dummy, Obse, size=8){
+  sp <- lapply(split(seq_len(ncol(Obse)), Obse$stratum), \(i){
+    if(length(i)>size) i <- sample(i, min(length(i), size))
+    i
+  })
+  bse <- Obse[,unlist(sp)]
+  bse$rndGroup <- unlist(lapply(sp, function(i){
+    sample(c("Split1", "Split2"), length(i), replace=TRUE)
+  }), use.names = FALSE)
+  mm <- model.matrix(~Sex+rndGroup, data=as.data.frame(colData(bse)))
+  bse <- bse[filterByExpr(as.matrix(assay(bse)), mm),]
+  assay(bse, "GCsmQN") <- GCSmoothQuantile(bse, bio="rndGroup")
+  bse <- CVnorm(bse, grouping = bse$rndGroup)
+  assayNames(bse) <- gsub("^corrected$", "smCVnorm", assayNames(bse))
+  bse <- CVnorm(bse, grouping = bse$rndGroup, shrinkMode="qsmooth")
+  assayNames(bse) <- gsub("^corrected$", "qsmCVnorm", assayNames(bse))
+  lapply(assays(bse), \(a){
+    a <- a[which(rowSums(is.na(a))==0),]
+    dge <- calcNormFactors(DGEList(a))
+    dge <- estimateDisp(dge, mm)
+    fit <- glmFit(dge, mm)
+    as.data.frame(topTags(glmLRT(fit, "rndGroupSplit2"), Inf))
+  })
+}
+
+set.seed(123)
+pres <- bplapply(1:30, BPPARAM=MulticoreParam(10, RNGseed=42, progress=verbose),
+                 Obse=bse, FUN=runOnePerm)
+saveRDS(pres, file="Waag_results_permutations.rds")
+
+set.seed(123)
+pres2 <- bplapply(1:30, BPPARAM=MulticoreParam(10, RNGseed=123, progress=verbose),
+                 Obse=bse, FUN=runOnePerm, size=4)
+saveRDS(pres2, file="Waag_results_permutations_small.rds")
+
+nDARs.p <- dplyr::bind_rows(lapply(pres, \(d){
+  dplyr::bind_rows(lapply(d, \(x){
+    data.frame(nDARs=sum(x$FDR<0.05))
+  }), .id="method")
+}), .id="permutation")
+nDARs.p2 <- dplyr::bind_rows(lapply(pres2, \(d){
+  dplyr::bind_rows(lapply(d, \(x){
+    data.frame(nDARs=sum(x$FDR<0.05))
+  }), .id="method")
+}), .id="permutation")
+
+nDARs$type <- "real data (8vs8)"
+nDARs$permutation <- 0
+nDARs.p$type <- "permutations (8vs8)"
+nDARs.p2$type <- "permutations (4vs4)"
+nDARs$method[order(-nDARs$nDARs)]
+
+m <- rbind(nDARs, nDARs.p, nDARs.p2)
+m <- m[which(m$method != "norm"),]
+m$method <- factor(m$method, as.character(nDARs$method[order(-nDARs$nDARs)]))
+m$type <- factor(m$type, unique(m$type))
+levels(m$method) <- gsub("^counts$", "raw", levels(m$method))
+saveRDS(m, file="DAR_stats.rds")
+```
+
+```{r}
+m <- readRDS("DAR_stats.rds")
+```
+
+
+```{r, fig.width=3, fig.height=5}
+ggplot(m, aes(method, nDARs)) + geom_col(stat = "summary", fun = "mean") + 
+  #geom_jitter(data=m[!grepl("real", m$type),], width = 0.2, height=0) + 
+  stat_summary() +
+  facet_wrap(~type, scale="free_y", ncol=1) + theme_bw() +
+  theme(axis.text.x=element_text(angle = 90, hjust=1, vjust=0.5))
+```
+
+```{r}
+DARs <- lapply(res, \(x) row.names(x)[which(x$FDR<0.05)])
+new_DARs <- setdiff(unique(unlist(DARs[grep("CVnorm",names(DARs))])),
+                    unique(unlist(DARs[grep("CVnorm",names(DARs), invert=TRUE)])))
+
+motifs <- query(MotifDb, c("HOCOMOCOv13"))
+motifs <- motifs[grepl("A$|B$",names(motifs))]
+motifs <- do.call(PWMatrixList, convert_motifs(motifs, "TFBSTools-PWMatrix"))
+names(motifs) <- sapply(motifs, \(x) x@name)
+motifs <- motifs[!duplicated(names(motifs))]
+```
+
+```{r}
+r <- rowRanges(bse)
+seqlevelsStyle(r) <- "UCSC"
+seqs <- getSeq(BSgenome.Mmusculus.UCSC.mm10, r)
+names(seqs) <- names(r)
+ame <- memes::runAme(seqs[which(names(r) %in% new_DARs)], control=seqs,
+                     database=convert_motifs(motifs), meme_path="/usr/bin/")
+saveRDS(ame, file = "Waag_results_AME.rds")
+```
+
+```{r}
+sessionInfo()
+```
+
