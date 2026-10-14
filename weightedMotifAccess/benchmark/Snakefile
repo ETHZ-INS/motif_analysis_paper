@@ -1,0 +1,63 @@
+import json
+import itertools
+import glob
+
+configfile: "config.yaml"
+R = config["R"]
+
+# WILDCARDS --------------------------------------------------------------------
+#  "PPARA", "ESR1", "ANDR"
+MOT = ["GATA1","GATA2","KLF1","NR1H3", "NR1H4", "RUNX1",  "MYC", "RUNX2",  "BANP"] #"NR1H4" "BANP" "NR3C1", "MYC","ESR1" "PPARA", "BANP"
+# "GATA1","GATA2","KLF1","NR1H3", "NR1H4", "RUNX1",  "MYC", "RUNX2", "BANP",
+human = ["GATA1", "GATA2", "KLF1", "RUNX1", "RUNX2", "MYC"] # "TRPS1" "ANDR"
+#MOT = ["GATA1", "GATA2", "KLF1", "RUNX1", "RUNX2", "MYC"]
+
+# motifs (Domcke dataset)
+MOT2 = ['Hmx2', 'Tbx4', 'Ebf3', 'Hes7', 'Pax3', 'Hmx1', 'Lbx1', 'Alx4', 'Hoxb5', 'Grhl1', 'Sox7', 'Esrrb',
+ 'Nr3c2', 'Zeb2', 'Lhx6', 'Npas4', 'Lhx4', 'Sox5', 'Runx1', 'Elf5', 'Cdx2', 'Nfe2', 'Nrf1', 'Nfia',
+ 'Gata1', 'Foxf1', 'Dlx3', 'Tbx20', 'Foxc1', 'Foxq1', 'Sox10', 'Gata6', 'Hnf1b', 'Glis1', 'Noto',
+ 'Lmx1a', 'Neurog1', 'Twist2', 'Lmx1b', 'Neurod1', 'Etv2']
+
+# RULES ========================================================================
+include: "workflow/rules/get_data.smk"
+include: "workflow/rules/differential_analysis.smk"
+
+# RESULTS ========================================================================
+
+res = {
+    "data": data,
+    "diff": diff
+}
+
+plt = []
+VAL = res.keys()
+for val in VAL:
+    x = glob_wildcards("workflow/code/08-plt_"+val+"-{x}.R").x
+    plt += expand("plts/{val}-{plt}.pdf", val=val, plt=x)
+
+# SETUP ========================================================================
+rule all: 
+    input:
+        [x for x in res.values()], plt,
+        #"session_info.txt"
+        
+# rule session_info:
+#     priority: 100
+#     input:  "workflow/workflow/workflow/code/10-session_info.R"
+#     output: "session_info.txt"
+#     log:    "logs/session_info.Rout"
+#     shell:  '''
+#     {R} CMD BATCH --no-restore --no-save\
+#     "--args {output}" {input} {log}'''
+
+# VISUALIZATION ========================================================
+for val in VAL:
+    rule:
+        priority: 49
+        input:  expand("workflow/code/08-plt_{val}-{{plt}}.R", val = val), x = res[val]
+        params: lambda wc, input: ";".join(input.x)
+        output: expand("plts/{val}-{{plt}}.pdf", val = val)
+        log:    expand("logs/plt_{val}-{{plt}}.Rout", val = val)
+        shell:  '''
+            {R} CMD BATCH --no-restore --no-save "--args\
+            {params} {output[0]}" {input[0]} {log}'''
