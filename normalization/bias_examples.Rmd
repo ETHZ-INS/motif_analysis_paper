@@ -17,6 +17,23 @@ suppressPackageStartupMessages({
 ```
 
 ```{r}
+getEnBias <- function(se, nbins=Inf){
+  se <- se[rowSums(assay(se))>1, ]
+  assay(se, "norm") <- edgeR::cpm(calcNormFactors(DGEList(assay(se))))
+  assay(se, "log2fc") <- log2(assay(se, "norm")+1)-log2(1+rowMeans(assay(se, "norm")))
+  d <- sechm::meltSE(se, row.names(se), colDat.columns = NA)
+  d$mean <- pmax(exp(rowMeans(log1p(assay(se, "norm"))))-1L,0)
+  if(nbins>=nrow(se)) return(d)
+  d$meanBin <- cut(d$mean, breaks=unique(quantile(d$mean, prob=(0:nbins)/nbins)))
+  ag <- aggregate(d[,c("mean","norm","log2fc")], d[,c("sample", "meanBin")], mean)
+  ag
+}
+```
+
+
+# Cusanovich data
+
+```{r}
 samps <- c(Fixed.37C = "SRX10861478.GSM5290898", Fixed.55C = "SRX10861481.GSM5290901",
            Native.37C = "SRX10861426.GSM5290846", Native.55C = "SRX10861421.GSM5290841")
 newNames <- setNames(paste0(names(samps),".",gsub(".+\\.","",samps)), samps)
@@ -59,13 +76,13 @@ save(gc_dens, wi_dens, file="example_bias.RData")
 load("example_bias.RData")
 p1 <- ggplot(gc_dens, aes(x = x, y = y, color=sample)) +
     geom_line(position="identity", linewidth=1) + theme_bw() +
-  labs(x="GC content", y="density", title="C: GC bias") +
+  labs(x="GC content", y="density", title="GC bias", tag="C") +
   scale_color_manual(values=cols)
 
 p2 <- ggplot(wi_dens, aes(x = x, y = y, color=sample)) +
     geom_line(position="identity", linewidth=1) + theme_bw() +
-  scale_x_sqrt(limit=c(0,1000), breaks=c(0,100,300,1000)) +
-  labs(x="Fragment length", y="density", title="B: Length bias") +
+  scale_x_sqrt(limit=c(min(wi_dens$x),1000), breaks=c(0,100,300,1000)) +
+  labs(x="Fragment length", y="density", tag="B", title="Length bias") +
   scale_color_manual(values=cols)
 ```
 
@@ -73,32 +90,68 @@ p2 <- ggplot(wi_dens, aes(x = x, y = y, color=sample)) +
 ```{r}
 se <- readRDS("/mnt/germain/datasets/CusanovichATACprotocols/mergedPeaks_SE.rds")
 assay(se, "norm") <- edgeR::cpm(calcNormFactors(DGEList(assay(se))))
-# se <- se[-59150,]
-# se <- betterChromVAR::addGCBias(se, Rsamtools::FaFile("/reference/Homo_sapiens/Ensembl/GRCh38.p10/Sequence/WholeGenomeFasta/Homo_sapiens.GRCh38.dna.toplevel.fa")) 
 dd <- rbind(
   data.frame(M=rowMeans(assay(se, "norm")), A=log(assay(se, "norm")[,samps[4]])-log(assay(se, "norm")[,samps[3]]),
              comparison="Native.55C vs Native.37C") )
-#dd$GC <- rowData(se)$bias  
 p3 <- ggplot(dd, aes(M, A)) + geom_hex(bins=c(70,15)) + scale_x_log10(limits=c(1,1000)) +
     geom_smooth(method="gam") + scale_fill_gradient(low="lightgrey", high="darkred") + 
-    labs(x="Mean accessibility", y="Log-foldchange", title="A: Enrichment bias") + 
+    labs(x="Mean accessibility", y="Log-foldchange", tag="A", title="Enrichment bias") + 
     facet_wrap(~comparison, nrow=2, scale="free_y") + theme_bw()
 ```
 
 ```{r}
-d <- sechm::meltSE(se[,samps], row.names(se), colDat.columns = NA)
+d <- getEnBias(se[,samps])
 d$sample <- factor(newNames[d$sample], newNames)
-d$mean <- rowMeans(assay(se,"norm"))
-d$ref <- assay(se,"norm")[,samps[["Native.37C"]]]
-p3b <- ggplot(d, aes(mean, log((norm+.1)/(ref+.1)), colour=sample, group=sample)) + 
-  geom_hline(yintercept=0, linewidth=1, colour="#619CFF") + 
-  geom_smooth(method = "gam", alpha = 0.2, color = NA, formula=y~s(x, sp=0.1)) +
-  geom_line(stat = "smooth", method = "gam", linewidth = 1, alpha = 1) +
-  scale_x_log10(limits=c(1,1000), exp=0) + theme_bw() +
-  theme(legend.position="none") + 
+xmax <- min(sapply(split(d$mean,d$sample),max))
+p3b <- ggplot(d, aes(mean, log2fc, colour=sample, group=sample)) + 
+  geom_smooth(method = "gam", formula = y ~ s(x, sp = 0.1), alpha = 0.2, linewidth = 1) +
+  theme_bw() + theme(legend.position="none") + 
+  scale_x_log10(exp=0) + coord_cartesian(xlim=c(1,1000), ylim=c(-3,1)) +
   scale_color_manual(values=cols) +
-  labs(y="Log-foldchange\nagainst Native.37C", x="Mean accessibility")
+  labs(y="Log-foldchange\nagainst mean", x="Mean accessibility")
 ```
+
+
+# NR1H4 data
+
+```{r}
+if(!dir.exists("DTFAB")){
+  dir.create("DTFAB")
+  option(timeout=300)
+  download.file("https://zenodo.org/records/23234227/files/counts.tar.gz?download=1", "DTFAB/counts.tar.gz")
+  untar("DTFAB/counts.tar.gz")
+}
+load("NR1H4_fragInfo.RData", verbose=TRUE)
+cols <- setNames(scales::hue_pal()(6), unique(gc$sample))
+
+se <- readRDS("DTFAB/NR1H4/runATAC_results/others/countmatrix.rds")
+colnames(se) <- gsub("\\.bam$","",colnames(se))
+
+ag <- getEnBias(se, 1000)
+lty <- c("FALSE"="solid", "TRUE"="dashed")
+
+pen1 <- ggplot(ag, aes(mean, log2fc, colour=sample, group=sample, linetype=grepl("NR1H4",sample))) +
+  geom_smooth(alpha=0.3, method = "gam", formula = y ~ s(x, sp = 0.1)) +
+  scale_color_manual(values=cols) + scale_fill_manual(values=cols) + scale_linetype_manual(values=lty) +
+  scale_x_log10(exp=0) + coord_cartesian(xlim=c(1,pmin(1000,max(ag$mean))), expand=0) +
+  theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank()) + 
+  labs(x="Mean accessibility", y="Log-foldchange\nagainst mean", tag="D")
+
+pgc1 <- ggplot(gc, aes(x, y, group=sample, color=sample, linetype=grepl("NR1H4",sample))) + 
+  geom_line(linewidth=1) +
+  scale_color_manual(values=cols) + scale_linetype_manual(values=lty) +
+  coord_cartesian(xlim=c(.15,.85)) +
+  theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank()) +
+  labs(x="GC Content", y="density", tag="F")
+pfl1 <- ggplot(fl, aes(x, y, group=sample, color=sample, linetype=grepl("NR1H4",sample))) + 
+  geom_line(linewidth=1) +
+  scale_color_manual(values=cols) + scale_linetype_manual(values=lty) +
+  scale_x_log10(lim=c(min(fl$x), 1000)) + 
+  theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank()) +
+  labs(x="Fragment length", y="density", tag="E")
+```
+
+
 
 # stress data
 
@@ -112,32 +165,27 @@ cols <- c(bg="grey", ex1="#F6DC55", ex2="#FF61CC")
 # highlight some samples that differ more strongly than average
 gc$col <- factor((gc$sample2=="CRS7_8_30") + 2*as.integer(gc$sample2=="CRS7_7_25"), 0:2, c("bg","ex1","ex2"))
 fl$col <- factor((fl$sample=="CRS7_8_30") + 2*as.integer(fl$sample=="CRS7_7_25"), 0:2, c("bg","ex1","ex2"))
-pgc <- ggplot(gc, aes(gc, x, group=sample2, color=col, linewidth=col, alpha=col)) + geom_line() +
+pgc2 <- ggplot(gc, aes(gc/100, x, group=sample2, color=col, linewidth=col, alpha=col)) + geom_line() +
   scale_linewidth_manual(values=c(bg=0.5, ex1=1, ex2=1)) + 
-  scale_color_manual(values=cols) +
+  scale_color_manual(values=cols) + coord_cartesian(xlim=c(.20,.85)) +
   scale_alpha_manual(values=c(bg=0.5, ex1=1, ex2=1)) + 
   theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank()) +
-  labs(x="GC %", y="density", tag="F")
-pfl <- ggplot(fl, aes(x, y, group=sample, color=col, linewidth=col, alpha=col)) + geom_line() +
+  labs(x="GC Content", y="density", tag="I")
+pfl2 <- ggplot(fl, aes(x, y, group=sample, color=col, linewidth=col, alpha=col)) + geom_line() +
   scale_linewidth_manual(values=c(bg=0.5, ex1=1, ex2=1)) + 
   scale_color_manual(values=cols) +
   scale_alpha_manual(values=c(bg=0.5, ex1=1, ex2=1)) + scale_x_log10() + 
   theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank()) +
-  labs(x="Fragment length", y="density", tag="E")
+  labs(x="Fragment length", y="density", tag="H")
 ```
 
 ```{r}
 bse <- readRDS("../Waag_et_al_data/bulkATAC.SE.rds")
 bse <- bse[rowSums(assay(bse))>0, colSums(assay(bse))>10e6]
-assay(bse, "norm") <- edgeR::cpm(calcNormFactors(DGEList(assay(bse))))
-d <- sechm::meltSE(bse, row.names(bse), colDat.columns = NA)
-d$mean <- rowMeans(assay(bse, "norm"))
-d$meanBin <- cut(d$mean, breaks=quantile(d$mean, prob=(0:500)/500))
-d$log2fc <- log2((d$norm+.1)/(d$mean+.1))
-ag <- aggregate(d[,c("mean","norm","log2fc")], d[,c("sample", "meanBin")], mean)
+ag <- getEnBias(bse, 1000)
 ag$col <- factor((ag$sample=="CRS7_8_30") + 2*as.integer(ag$sample=="CRS7_7_25"), 0:2, c("bg","ex1","ex2"))
 
-pen <- ggplot(ag, aes(mean, log2fc, colour=col, group=sample, alpha=col, fill=col, linewidth=col)) +
+pen2 <- ggplot(ag, aes(mean, log2fc, colour=col, group=sample, alpha=col, fill=col, linewidth=col)) +
   geom_smooth(data = ag[which(ag$col== "bg"),], alpha=0.3,
               method = "gam", formula = y ~ s(x, sp = 0.1), se = FALSE) +
   geom_smooth(data = ag[which(ag$col != "bg"),], alpha=0.3, 
@@ -147,7 +195,7 @@ pen <- ggplot(ag, aes(mean, log2fc, colour=col, group=sample, alpha=col, fill=co
   scale_alpha_manual(values=c(bg=0.3, ex1=1, ex2=1)) + 
   scale_x_log10(limits=c(1,max(ag$mean)), exp=0) +
   theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank()) + 
-  labs(x="Mean accessibility", y="Log-foldchange\nagainst mean", tag="D")
+  labs(x="Mean accessibility", y="Log-foldchange\nagainst mean", tag="G")
 ```
 
 
@@ -158,16 +206,17 @@ pen + pfl + pgc
 
 
 
-```{r, fig.width=10, fig.height=7}
+```{r, fig.width=10, fig.height=8.1}
 p12 <- (p2 + p1 + plot_layout(nrow=1, guides="collect") & 
           guides(color = guide_legend(nrow = 2)) & 
           theme(legend.position="bottom", panel.grid.minor = element_blank()) )
 
-pdf("example_bias.pdf", width=10, height=7)
+pdf("example_bias.pdf", width=10, height=8.1)
 cowplot::plot_grid(
   cowplot::plot_grid((p3/free(p3b)) & theme(panel.grid.minor = element_blank()), p12, rel_widths=c(4,6)),
-  cowplot::plot_grid(pen, pfl, pgc + coord_cartesian(xlim=c(20,85)), nrow=1),
-  nrow=2, rel_heights=c(3,2))
+  cowplot::plot_grid(pen1, pfl1, pgc1, nrow=1),
+  cowplot::plot_grid(pen2, pfl2, pgc2, nrow=1),
+  nrow=3, rel_heights=c(3.25,2,2))
 dev.off()
 ```
 
