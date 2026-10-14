@@ -11,6 +11,7 @@ library(BiocParallel)
 library(chromVARmotifs)
 library(chromVAR)
 library(BSgenome.Mmusculus.UCSC.mm10)
+library(hexbin)
 
 motifs <- chromVARmotifs::encode_pwms
 rse <- readRDS("sce.rds")
@@ -22,6 +23,23 @@ bg <- getBackgroundPeaks(rse, niterations=100)
 dev1 <- computeDeviations(object = rse, annotations = motif_ix, background_peaks=bg)
 bg <- getBackgroundPeaks(rse, niterations=100)
 dev2 <- computeDeviations(object = rse, annotations = motif_ix, background_peaks=bg)
+
+d <- data.frame(seed1=as.numeric(as.matrix(assay(dev1))), seed2=as.numeric(as.matrix(assay(dev2))))
+cors <- c(deviations=cor(d$seed1,d$seed2,use="pairwise"))
+hexD <- hexbin(d$seed1, d$seed2, xbins = 100)
+d <- data.frame(seed1=as.numeric(as.matrix(assay(dev1,"z"))), seed2=as.numeric(as.matrix(assay(dev2,"z"))))
+cors <- c(cors, "z-scores"=cor(d$seed1,d$seed2,use="pairwise"))
+hexZ <- hexbin(d$seed1, d$seed2, xbins = 100)
+
+cors <- data.frame(assay=names(cors), cor=paste0("r=",round(cors,3)))
+
+hex_df <- dplyr::bind_rows(lapply(list("deviations"=hexD, "z-scores"=hexZ), \(hd){
+  data.frame(hcell2xy(hd), count = hd@count)
+}), .id="assay")
+
+save(hex_df, cors, file="original_seed_comparisons_hex.RData")
+
+
 dev <- SummarizedExperiment(list(deviations=(assay(dev1)+assay(dev2))/2,
                                  z=(assay(dev1,"z")+assay(dev2,"z"))/2),
                             colData=colData(dev1), rowData=rowData(dev1))
