@@ -100,16 +100,89 @@ p3b <- ggplot(d, aes(mean, log((norm+.1)/(ref+.1)), colour=sample, group=sample)
   labs(y="Log-foldchange\nagainst Native.37C", x="Mean accessibility")
 ```
 
+# stress data
 
 
-```{r, fig.width=10, fig.height=5}
+```{r}
+load("../Waag_et_al_data/fl_gc_distributions.RData", verbose=TRUE)
+# remove low libsize sample:
+gc <- gc[which(gc$sample2!="CRS7_8_29"),]
+fl <- fl[which(fl$sample!="CRS7_8_29"),]
+cols <- c(bg="grey", ex1="#F6DC55", ex2="#FF61CC")
+# highlight some samples that differ more strongly than average
+gc$col <- factor((gc$sample2=="CRS7_8_30") + 2*as.integer(gc$sample2=="CRS7_7_25"), 0:2, c("bg","ex1","ex2"))
+fl$col <- factor((fl$sample=="CRS7_8_30") + 2*as.integer(fl$sample=="CRS7_7_25"), 0:2, c("bg","ex1","ex2"))
+pgc <- ggplot(gc, aes(gc, x, group=sample2, color=col, linewidth=col, alpha=col)) + geom_line() +
+  scale_linewidth_manual(values=c(bg=0.5, ex1=1, ex2=1)) + 
+  scale_color_manual(values=cols) +
+  scale_alpha_manual(values=c(bg=0.5, ex1=1, ex2=1)) + 
+  theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank()) +
+  labs(x="GC %", y="density", tag="F")
+pfl <- ggplot(fl, aes(x, y, group=sample, color=col, linewidth=col, alpha=col)) + geom_line() +
+  scale_linewidth_manual(values=c(bg=0.5, ex1=1, ex2=1)) + 
+  scale_color_manual(values=cols) +
+  scale_alpha_manual(values=c(bg=0.5, ex1=1, ex2=1)) + scale_x_log10() + 
+  theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank()) +
+  labs(x="Fragment length", y="density", tag="E")
+```
+
+```{r}
+bse <- readRDS("../Waag_et_al_data/bulkATAC.SE.rds")
+bse <- bse[rowSums(assay(bse))>0, colSums(assay(bse))>10e6]
+assay(bse, "norm") <- edgeR::cpm(calcNormFactors(DGEList(assay(bse))))
+d <- sechm::meltSE(bse, row.names(bse), colDat.columns = NA)
+d$mean <- rowMeans(assay(bse, "norm"))
+d$meanBin <- cut(d$mean, breaks=quantile(d$mean, prob=(0:500)/500))
+d$log2fc <- log2((d$norm+.1)/(d$mean+.1))
+ag <- aggregate(d[,c("mean","norm","log2fc")], d[,c("sample", "meanBin")], mean)
+ag$col <- factor((ag$sample=="CRS7_8_30") + 2*as.integer(ag$sample=="CRS7_7_25"), 0:2, c("bg","ex1","ex2"))
+
+pen <- ggplot(ag, aes(mean, log2fc, colour=col, group=sample, alpha=col, fill=col, linewidth=col)) +
+  geom_smooth(data = ag[which(ag$col== "bg"),], alpha=0.3,
+              method = "gam", formula = y ~ s(x, sp = 0.1), se = FALSE) +
+  geom_smooth(data = ag[which(ag$col != "bg"),], alpha=0.3, 
+              method = "gam", formula = y ~ s(x, sp = 0.1), se = TRUE) +
+  scale_linewidth_manual(values=c(bg=0.5, ex1=1, ex2=1)) + 
+  scale_color_manual(values=cols) + scale_fill_manual(values=cols) +
+  scale_alpha_manual(values=c(bg=0.3, ex1=1, ex2=1)) + 
+  scale_x_log10(limits=c(1,max(ag$mean)), exp=0) +
+  theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank()) + 
+  labs(x="Mean accessibility", y="Log-foldchange\nagainst mean", tag="D")
+```
+
+
+```{r, fig.width=10, fig.height=3}
+pen + pfl + pgc
+```
+
+
+
+
+```{r, fig.width=10, fig.height=7}
 p12 <- (p2 + p1 + plot_layout(nrow=1, guides="collect") & 
-          guides(color = guide_legend(nrow = 2)) & theme(legend.position = "bottom"))
+          guides(color = guide_legend(nrow = 2)) & 
+          theme(legend.position="bottom", panel.grid.minor = element_blank()) )
 
-pdf("example_bias.pdf", width=10, height=5)
-cowplot::plot_grid((p3/free(p3b)), p12, rel_widths=c(4,6))
+pdf("example_bias.pdf", width=10, height=7)
+cowplot::plot_grid(
+  cowplot::plot_grid((p3/free(p3b)) & theme(panel.grid.minor = element_blank()), p12, rel_widths=c(4,6)),
+  cowplot::plot_grid(pen, pfl, pgc + coord_cartesian(xlim=c(20,85)), nrow=1),
+  nrow=2, rel_heights=c(3,2))
 dev.off()
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ```{r, fig.width=10, fig.height=3}
 a <- (p3 + theme(legend.position = "none"))
