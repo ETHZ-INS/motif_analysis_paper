@@ -18,6 +18,18 @@ dev <- dev[,which(dev$sgAssignFinal!="UNK")]
 ```
 
 ```{r}
+umapComp <- function(dev, tf, ps=0.7){
+  (plotUMAP(dev, color_by=tf, by.assay.type="z", point_size=ps) + 
+     guides(colour = guide_colorbar(title = "z-score", barheight = unit(2.5, "cm")))) + 
+    (plotUMAP(dev, color_by=tf, by.assay.type="smoothed.z", point_size=ps) + 
+       guides(colour = guide_colorbar(title = "smoothed\nz-score", barheight = unit(2.5, "cm")))) +
+    plot_annotation(title=paste0("     ",tf)) & 
+    (theme_void() + theme( legend.position = c(0.85, 0.98), legend.justification = c(1, 1)))
+}
+```
+
+
+```{r}
 pref <- c("bin-based\nsmoothed"="smoothed.", "bin-based"="", "knn-based"="knn.")
 res <- dplyr::bind_rows(lapply(pref, \(pr){
   se <- dev
@@ -80,18 +92,18 @@ p1 <- ggplot(res[which(res$variable=="Pearson"),], aes(variant, value)) +
     )
 
 p2a <- ggplot(res[which(res$combined=="variance  of  deviations"),], aes(variant, value)) + 
-  geom_hline( data = ag[which(ag$combined=="variance  of  deviations"),], aes(yintercept = x),
-    inherit.aes = FALSE, linetype = "dashed", color = "grey40") +
-  stat_summary(size=0.2) + theme_bw() + facet_wrap(~combined) + 
-  labs(x=NULL, y="Variance between\nreplicate cells") +
-  scale_y_continuous(expand = expansion(mult = c(0.05, 0.1))) +
-  geom_signif( comparisons = comparisons[c(1:2,4,3)],
-    y_position = 0.006 + (0:length(comparisons))*0.001,
-    test = "wilcox.test",
-    map_signif_level = function(x) paste0("p = ", signif(x, 2)),
-    tip_length = 0.03,
-    textsize = 3
-  )
+    geom_hline( data = ag[which(ag$combined=="variance  of  deviations"),], aes(yintercept = x),
+                inherit.aes = FALSE, linetype = "dashed", color = "grey40") +
+    stat_summary(size=0.2) + theme_bw() + facet_wrap(~combined) + 
+    labs(x=NULL, y="Variance between\nreplicate cells") +
+    scale_y_continuous(expand = expansion(mult = c(0.05, 0.1))) +
+    geom_signif( comparisons = comparisons,
+                 y_position = 0.0053 + (0:length(comparisons))*0.0005,
+                 test = "wilcox.test",
+                 map_signif_level = function(x) paste0("p = ", signif(x, 2)),
+                 tip_length = 0.03,
+                 textsize = 3
+    )
 
 p2b <- ggplot(res[which(res$combined=="variance  of  z-scores"),], aes(variant, value)) + 
   geom_hline( data = ag[which(ag$combined=="variance  of  z-scores"),], aes(yintercept = x),
@@ -137,8 +149,9 @@ ggplot(d, aes(TF, abs(diff), fill=smoothed)) + geom_col(position = position_dodg
 
 
 d$variant <- factor(gsub("deviations|z|\\.","",d$type))
-d <- d[!grepl("weights", d$variant)]
-levels(d$variant) <- c("bin-based", "knn-based","knn-based\n+weights","bin-based\n+smoothing")
+d <- d[!grepl("knnW", d$variant),]
+d$variant <- droplevels(d$variant)
+levels(d$variant) <- c("bin-based", "knn-based", "bin-based\n+smoothing")
 p3 <- ggplot(d, aes(TF, abs(diff)/se, fill=variant)) + geom_col(position = position_dodge()) +
   facet_wrap(~assay, scale="free_y") + scale_y_sqrt() + theme_bw() + 
   theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.5)) +
@@ -149,7 +162,9 @@ p3 <- ggplot(d, aes(TF, abs(diff)/se, fill=variant)) + geom_col(position = posit
 ```{r, fig.width=10, fig.height=11}
 pdf("Supp_knn_smoothing.pdf", width=10, height=11)
 plot_grid(p1 / (p2a + p2b), p3,
-          nrow=2, labels="AUTO", rel_heights = c(2,1.1))
+          plot_grid(plotUMAP(dev, color_by="sgAssignFinal", point_size=0.7) + theme_void(),
+                    umapComp(dev, "MYC"), labels=c("C","D"), scale=0.95),
+          nrow=3, labels=c("A","B",NA), rel_heights = c(2,1.2,1), scale=c(0.95,0.95,1))
 dev.off()
 ```
 
