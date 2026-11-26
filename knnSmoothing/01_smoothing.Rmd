@@ -1,0 +1,116 @@
+---
+title: "kNN-based smoothing of the motif scores"
+output: html_document
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(SingleCellExperiment)
+  library(betterChromVAR)
+  library(Matrix)
+  library(BiocSingular)
+  library(BiocNeighbors)
+  library(BSgenome.Hsapiens.UCSC.hg38)
+  library(patchwork)
+  library(scater)
+})
+```
+
+```{r}
+f <- "GSE168851_scATAC_K562_TimeCourse_Peak_Matrix_SE.rds"
+if(!file.exists(f)){
+  options(timeout=10000)
+  download.file("https://ftp.ncbi.nlm.nih.gov/geo/series/GSE168nnn/GSE168851/suppl/GSE168851%5FscATAC%5FK562%5FTimeCourse%5FPeak%5FMatrix%5FSE%2Erds%2Egz",
+                paste0(f,".gz"))
+  R.utils::gunzip(paste0(f,".gz"))
+}
+```
+
+```{r}
+sce <- readRDS("GSE168851_scATAC_K562_TimeCourse_Peak_Matrix_SE.rds")
+sce <- addGCBias(sce, BSgenome.Hsapiens.UCSC.hg38)
+```
+
+# scATACseq processing
+
+```{r}
+sce <- as(sce, "SingleCellExperiment")
+assayNames(sce) <- "counts"
+
+sce$libsize <- colSums(assay(sce))
+sce <- sce[which(rowSums(assay(sce)>0L) >= 50),
+           which(sce$libsize>=500)]
+idf <- log1p(ncol(sce)/pmax(rowSums(assay(sce)), 1))
+tfidf <- t(t(assay(sce)) / sce$libsize) * idf
+
+
+set.seed(42)
+svd_res <- runSVD(t(tfidf), k=20, BSPARAM=BiocSingular::IrlbaParam())
+
+lsi <- svd_res$u %*% diag(svd_res$d, nrow=length(svd_res$d))
+rownames(lsi) <- colnames(sce)
+colnames(lsi) <- paste0("LSI_", seq_len(ncol(lsi)))
+
+print(abs(stats::cor(lsi[, 1:3], sce$libsize)))
+
+reducedDim(sce, "LSI") <- lsi
+
+nn <- findKNN(lsi, k=20, BNPARAM=AnnoyParam(distance="Cosine"))
+```
+
+# betterChromVAR & smoothing
+
+```{r}
+if(file.exists("motif_ix.SE.rds")){
+  motif_ix <- readRDS("motif_ix.SE.rds")
+}else{
+  library(motifmatchr)
+  library(BSgenome.Hsapiens.UCSC.hg38)
+  source("/common/scripts/getNonRedundantMotifs.R")
+  motifs <- getNonRedundantMotifs("PWMatrix")
+  motif_ix <- matchMotifs(motifs, sce, genome=BSgenome.Hsapiens.UCSC.hg38)
+  saveRDS(motif_ix, "motif_ix.SE.rds")
+}
+
+row.names(sce) <- as.character(granges(sce))
+row.names(motif_ix) <- gsub(":+","",as.character(granges(motif_ix)),fixed=TRUE)
+motif_ix <- motif_ix[row.names(sce),]
+```
+
+```{r}
+dev <- betterChromVAR(sce, motif_ix)
+```
+
+```{r}
+dev <- smoothDeviationsKNN(dev, nn)
+```
+
+```{r}
+dev <- as(dev, "SingleCellExperiment")
+reducedDims(dev) <- reducedDims(sce)
+dev <- runUMAP(dev, dimred="LSI")
+saveRDS(dev, file="devs.SE.rds")
+```
+
+# kNN-based methods
+
+```{r}
+bg <- getBackgroundKNN(sce, weights = "none")
+dev2 <- computeDeviationsFromKNN(sce, bg, motif_ix)
+assayNames(dev2) <- paste0("knn.",assayNames(dev2))
+assays(dev) <- c(assays(dev), assays(dev2))
+bg <- getBackgroundKNN(sce)
+dev2 <- computeDeviationsFromKNN(sce, bg, motif_ix)
+assayNames(dev2) <- paste0("knnW.",assayNames(dev2))
+assays(dev) <- c(assays(dev), assays(dev2))
+```
+
+
+```{r}
+saveRDS(dev, file="devs2.SE.rds")
+```
+
+```{r}
+sessionInfo()
+```
+

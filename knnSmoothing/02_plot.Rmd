@@ -1,0 +1,156 @@
+---
+title: "02_plot"
+output: html_document
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(SingleCellExperiment)
+  library(scater)
+  library(ggsignif)
+})
+```
+
+```{r}
+dev <- readRDS("devs2.SE.rds")
+dev <- dev[,which(dev$sgAssignFinal!="UNK")]
+```
+
+```{r}
+pref <- c("bin-based\nsmoothed"="smoothed.", "bin-based"="", "knn-based"="knn.")
+res <- dplyr::bind_rows(lapply(pref, \(pr){
+  se <- dev
+  if(pr!="smoothed."){
+    d <- assay(se,paste0(pr,"deviations"))
+  }else{
+    d <- assay(se, "smoothed")
+  }
+  z <- assay(se,paste0(pr,"z"))
+  si <- split(seq_len(ncol(se)), se$sgAssign2)
+  dplyr::bind_rows(lapply(si, \(i){
+    z <- z[,i]
+    d <- d[,i]
+    tres <- list(z.cor=cor(z, rowMeans(z)),
+                 z.var=rowVars(z),
+                 z.sp=cor(z, rowMeans(z), method="spearman"),
+                 d.cor=cor(d, rowMeans(d)),
+                 d.var=rowVars(d),
+                 d.sp=cor(d, rowMeans(d), method="spearman"))
+    data.frame(assay=rep(c("z-scores","deviations"), each=3),
+               variable=rep(c("Pearson","variance","Spearman"),2),
+               value=sapply(tres, mean))
+  }), .id="sgRNA")
+}), .id="variant")
+res$combined <- paste(res$variable, " of ", res$assay)
+res$variant <- factor(as.character(res$variant), names(pref))
+
+comparisons = list(
+  levels(res$variant)[1:2],
+  levels(res$variant)[2:3])
+
+res <- res[order(res$combined, res$variant, res$sgRNA),]
+for (fv in unique(res$combined)) {
+  df <- res[res$combined == fv, , drop = FALSE]
+  for (pair in comparisons) {
+    s1 <- df$sgRNA[df$variant == pair[1]]
+    s2 <- df$sgRNA[df$variant == pair[1]]
+    stopifnot(!anyNA(s1) && !anyNA(s2))
+    stopifnot(length(s1) == length(s2) && setequal(s1, s2))
+    stopifnot(identical(s1, s2))
+  }
+}
+
+ag <- aggregate(c(value=res$value), by=res[,c("combined", "variable", "variant")], mean)
+ag <- ag[which(ag$variant=="bin-based"),]
+
+
+p1 <- ggplot(res[which(res$variable=="Pearson"),], aes(variant, value)) + 
+    geom_hline( data = ag[which(ag$variable=="Pearson"),], aes(yintercept = x),
+                inherit.aes = FALSE, linetype = "dashed", color = "grey40") +
+    stat_summary(size=0.2) + theme_bw() + facet_wrap(~combined) + 
+    labs(x=NULL, y="Correlation between\nreplicate cells") +
+    scale_y_continuous(expand = expansion(mult = c(0.05, 0.1))) +
+    geom_signif( comparisons = comparisons,
+                 y_position = c(0.23, 0.16),
+                 test = "wilcox.test",
+                 map_signif_level = function(x) paste0("p = ", signif(x, 2)),
+                 tip_length = 0.01,
+                 textsize = 3
+    )
+
+p2a <- ggplot(res[which(res$combined=="variance  of  deviations"),], aes(variant, value)) + 
+  geom_hline( data = ag[which(ag$combined=="variance  of  deviations"),], aes(yintercept = x),
+    inherit.aes = FALSE, linetype = "dashed", color = "grey40") +
+  stat_summary(size=0.2) + theme_bw() + facet_wrap(~combined) + 
+  labs(x=NULL, y="Variance between\nreplicate cells") +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.1))) +
+  geom_signif( comparisons = comparisons[c(1:2,4,3)],
+    y_position = 0.006 + (0:length(comparisons))*0.001,
+    test = "wilcox.test",
+    map_signif_level = function(x) paste0("p = ", signif(x, 2)),
+    tip_length = 0.03,
+    textsize = 3
+  )
+
+p2b <- ggplot(res[which(res$combined=="variance  of  z-scores"),], aes(variant, value)) + 
+  geom_hline( data = ag[which(ag$combined=="variance  of  z-scores"),], aes(yintercept = x),
+    inherit.aes = FALSE, linetype = "dashed", color = "grey40") +
+  stat_summary(size=0.2) + theme_bw() + facet_wrap(~combined) + 
+  labs(x=NULL, y="Variance") + theme(axis.title.y = element_blank()) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.1))) +
+  geom_signif( comparisons = comparisons,
+    y_position = c(2.55, 1.7),
+    test = "wilcox.test",
+    map_signif_level = function(x) paste0("p = ", signif(x, 2)),
+    tip_length = 0.015,
+    textsize = 3
+  )
+
+
+p1 / (p2a + p2b)
+```
+
+
+```{r}
+dev2 <- lapply(assays(dev), \(a){
+  se <- scuttle::sumCountsAcrossCells(a, colData(dev)[,"sgAssignFinal",drop=FALSE], average=TRUE)
+  colnames(se) <- gsub("^sg","",se$sgAssignFinal)
+  assay(se)
+})
+names(KDs) <- KDs <- setdiff(colnames(dev2[[1]]),"NT")
+d <- dplyr::bind_rows(lapply(KDs, \(tf){
+  w1 <- which(dev$sgAssignFinal==paste0("sg",tf))
+  w2 <- which(dev$sgAssignFinal=="sgNT")
+  dplyr::bind_rows(lapply(assays(dev), \(a){
+    x <- a[tf,w1]
+    y <- a[tf,w2]
+    data.frame(diff=mean(x)-mean(y), se=sqrt(var(x)/length(x) + var(y)/length(y)))
+  }), .id="type")
+}), .id="TF")
+d$smoothed <- grepl("smoothed", d$type)
+d$assay <- ifelse(grepl("z",d$type), "z-scores", "deviations")
+ggplot(d, aes(TF, abs(diff), fill=smoothed)) + geom_col(position = position_dodge()) +
+  facet_wrap(~assay, scale="free_y") + scale_y_sqrt() + theme_bw() + 
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.5)) +
+  ylab("|mean difference| between KD and control")
+
+
+d$variant <- factor(gsub("deviations|z|\\.","",d$type))
+d <- d[!grepl("weights", d$variant)]
+levels(d$variant) <- c("bin-based", "knn-based","knn-based\n+weights","bin-based\n+smoothing")
+p3 <- ggplot(d, aes(TF, abs(diff)/se, fill=variant)) + geom_col(position = position_dodge()) +
+  facet_wrap(~assay, scale="free_y") + scale_y_sqrt() + theme_bw() + 
+  theme(axis.text.x = element_text(angle=90, hjust=1, vjust=0.5)) +
+  ylab("t-value between KD and control")
+```
+
+
+```{r, fig.width=10, fig.height=11}
+pdf("Supp_knn_smoothing.pdf", width=10, height=11)
+plot_grid(p1 / (p2a + p2b), p3,
+          nrow=2, labels="AUTO", rel_heights = c(2,1.1))
+dev.off()
+```
+
+
