@@ -18,15 +18,23 @@ suppressPackageStartupMessages({
   library(qsmooth)
   library(Hmisc)
   library(GenomeInfoDb)
+  library(ggplot2)
+  library(weightedMotifAccess)
 })
 verbose <- FALSE
 source("https://raw.githubusercontent.com/ETHZ-INS/DTFAB/refs/heads/main/Scripts/GCnorm.R")
 counts <- function(se) assay(se,"counts")
 ```
 
-```{r, eval=FALSE}
+```{r}
 bse <- readRDS("bulkATAC.SE.rds")
 bse <- bse[rowSums(assay(bse))>0,]
+seqlevelsStyle(BSgenome.Mmusculus.UCSC.mm10) <- "ensembl"
+lf <- list.files("/mnt/bohacek/internData/2023_waag_CRS7_ATAC/aligned/", pattern="bam$", full=TRUE)
+```
+
+
+```{r, eval=FALSE}
 assay(bse, "GCQN") <- GCQuantileNorm(bse)
 assay(bse, "GCsmQN") <- GCSmoothQuantile(bse, bio="Group")
 bse <- CVnorm(bse)
@@ -35,6 +43,9 @@ bse <- CVnorm(bse, grouping = bse$Group)
 assayNames(bse) <- gsub("^corrected$", "smCVnorm", assayNames(bse))
 bse <- CVnorm(bse, grouping = bse$rndGroup, shrinkMode="qsmooth")
 assayNames(bse) <- gsub("^corrected$", "qsmCVnorm", assayNames(bse))
+bse2 <- readRDS("bulkATAC.SE.weighted.rds")
+assay(bse, "weighted") <- assay(bse2, "weighted")
+assay(bse, "tn5weighted") <- assay(bse2, "tn5weighted")
 
 mm <- model.matrix(~Sex+Group, data=as.data.frame(colData(bse)))
 bse <- bse[filterByExpr(as.matrix(assay(bse)), mm),]
@@ -126,6 +137,7 @@ ggplot(m, aes(method, nDARs)) + geom_col(stat = "summary", fun = "mean") +
 ```
 
 ```{r}
+res <- readRDS("Waag_results.rds")
 DARs <- lapply(res, \(x) row.names(x)[which(x$FDR<0.05)])
 new_DARs <- setdiff(unique(unlist(DARs[grep("CVnorm",names(DARs))])),
                     unique(unlist(DARs[grep("CVnorm",names(DARs), invert=TRUE)])))

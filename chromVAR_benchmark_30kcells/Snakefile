@@ -9,6 +9,7 @@ rule all:
         "results/original.rds",
         "results/ArchR.rds",
         "results/betterChromVAR.rds",
+	"results/betterChromVARnoFPC.rds",
 	"results/betterChromVARkNN.rds",
 	"results/scan_only.rds"
 

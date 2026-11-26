@@ -112,19 +112,53 @@ p3b <- ggplot(d, aes(mean, log2fc, colour=sample, group=sample)) +
 ```
 
 
+# Bysani 2019
+
+```{r, fig.width=11, fig.height=3}
+load("Bysani2019_fragInfo.RData", verbose=TRUE)
+se <- readRDS("Bysani2019ctrl.SE.rds")
+
+ag <- getEnBias(se, 1000)
+s2prep <- setNames(gsub(", .+","",se$prep), colnames(se))
+ag$prep <- s2prep[ag$sample]
+gc$prep <- s2prep[gc$sample]
+fl$prep <- s2prep[fl$sample]
+
+pen0 <- ggplot(ag, aes(mean, log2fc, colour=prep, group=sample)) +
+  geom_smooth(alpha=0.3, method = "gam", formula = y ~ s(x, sp = 0.1)) +
+  scale_fill_manual(values=cols) + 
+  scale_x_log10(exp=0) + coord_cartesian(xlim=c(1,pmin(1000,max(ag$mean))), expand=0) +
+  theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank()) + 
+  labs(x="Mean accessibility", y="Log-foldchange\nagainst mean", tag="D") +
+  theme(plot.margin = margin(t = 5.5, r = 12, b = 5.5, l = 5.5))
+
+pgc0 <- ggplot(gc, aes(x, y, group=sample, color=prep)) + 
+  geom_line(linewidth=1) +
+  coord_cartesian(xlim=c(.15,.85)) +
+  theme_bw() + theme(panel.grid.minor = element_blank()) +
+  labs(x="GC Content", y="density", tag="F")
+pfl0 <- ggplot(fl, aes(x, y, group=sample, color=prep)) + 
+  geom_line(linewidth=1) +
+  scale_x_log10(lim=c(min(fl$x), 1000)) + 
+  theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank()) +
+  labs(x="Fragment length", y="density", tag="E")
+
+pen0 + pfl0 + pgc0
+```
+
 # NR1H4 data
 
 ```{r}
-if(!dir.exists("DTFAB")){
-  dir.create("DTFAB")
+if(!dir.exists("../DTFAB")){
+  dir.create("../DTFAB")
   option(timeout=300)
-  download.file("https://zenodo.org/records/23234227/files/counts.tar.gz?download=1", "DTFAB/counts.tar.gz")
-  untar("DTFAB/counts.tar.gz")
+  download.file("https://zenodo.org/records/23234227/files/counts.tar.gz?download=1", "../DTFAB/counts.tar.gz")
+  untar("../DTFAB/counts.tar.gz")
 }
 load("NR1H4_fragInfo.RData", verbose=TRUE)
 cols <- setNames(scales::hue_pal()(6), unique(gc$sample))
 
-se <- readRDS("DTFAB/NR1H4/runATAC_results/others/countmatrix.rds")
+se <- readRDS("../DTFAB/NR1H4/runATAC_results/others/countmatrix.rds")
 colnames(se) <- gsub("\\.bam$","",colnames(se))
 
 ag <- getEnBias(se, 1000)
@@ -135,22 +169,24 @@ pen1 <- ggplot(ag, aes(mean, log2fc, colour=sample, group=sample, linetype=grepl
   scale_color_manual(values=cols) + scale_fill_manual(values=cols) + scale_linetype_manual(values=lty) +
   scale_x_log10(exp=0) + coord_cartesian(xlim=c(1,pmin(1000,max(ag$mean))), expand=0) +
   theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank()) + 
-  labs(x="Mean accessibility", y="Log-foldchange\nagainst mean", tag="D")
+  labs(x="Mean accessibility", y="Log-foldchange\nagainst mean", tag="G") +
+  theme(plot.margin = margin(t = 5.5, r = 12, b = 5.5, l = 5.5))
 
-pgc1 <- ggplot(gc, aes(x, y, group=sample, color=sample, linetype=grepl("NR1H4",sample))) + 
+gc$condition <- factor(ifelse(grepl("NR1H4",gc$sample), "treated", "control"))
+pgc1 <- ggplot(gc, aes(x, y, group=sample, color=sample, linetype=condition)) + 
   geom_line(linewidth=1) +
-  scale_color_manual(values=cols) + scale_linetype_manual(values=lty) +
+  scale_color_manual(values=cols, guide=FALSE) + 
+  scale_linetype_manual(values=setNames(lty, c("control","treated"))) +
   coord_cartesian(xlim=c(.15,.85)) +
-  theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank()) +
-  labs(x="GC Content", y="density", tag="F")
+  theme_bw() + theme(panel.grid.minor = element_blank()) +
+  labs(x="GC Content", y="density", tag="I")
 pfl1 <- ggplot(fl, aes(x, y, group=sample, color=sample, linetype=grepl("NR1H4",sample))) + 
   geom_line(linewidth=1) +
   scale_color_manual(values=cols) + scale_linetype_manual(values=lty) +
   scale_x_log10(lim=c(min(fl$x), 1000)) + 
   theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank()) +
-  labs(x="Fragment length", y="density", tag="E")
+  labs(x="Fragment length", y="density", tag="H")
 ```
-
 
 
 # stress data
@@ -170,13 +206,13 @@ pgc2 <- ggplot(gc, aes(gc/100, x, group=sample2, color=col, linewidth=col, alpha
   scale_color_manual(values=cols) + coord_cartesian(xlim=c(.20,.85)) +
   scale_alpha_manual(values=c(bg=0.5, ex1=1, ex2=1)) + 
   theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank()) +
-  labs(x="GC Content", y="density", tag="I")
+  labs(x="GC Content", y="density", tag="L")
 pfl2 <- ggplot(fl, aes(x, y, group=sample, color=col, linewidth=col, alpha=col)) + geom_line() +
   scale_linewidth_manual(values=c(bg=0.5, ex1=1, ex2=1)) + 
   scale_color_manual(values=cols) +
   scale_alpha_manual(values=c(bg=0.5, ex1=1, ex2=1)) + scale_x_log10() + 
   theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank()) +
-  labs(x="Fragment length", y="density", tag="H")
+  labs(x="Fragment length", y="density", tag="K")
 ```
 
 ```{r}
@@ -195,28 +231,26 @@ pen2 <- ggplot(ag, aes(mean, log2fc, colour=col, group=sample, alpha=col, fill=c
   scale_alpha_manual(values=c(bg=0.3, ex1=1, ex2=1)) + 
   scale_x_log10(limits=c(1,max(ag$mean)), exp=0) +
   theme_bw() + theme(legend.position = "none", panel.grid.minor = element_blank()) + 
-  labs(x="Mean accessibility", y="Log-foldchange\nagainst mean", tag="G")
-```
-
-
-```{r, fig.width=10, fig.height=3}
-pen + pfl + pgc
+  labs(x="Mean accessibility", y="Log-foldchange\nagainst mean", tag="J") +
+  theme(plot.margin = margin(t = 5.5, r = 12, b = 5.5, l = 5.5))
 ```
 
 
 
 
-```{r, fig.width=10, fig.height=8.1}
+
+```{r, fig.width=10, fig.height=11}
 p12 <- (p2 + p1 + plot_layout(nrow=1, guides="collect") & 
           guides(color = guide_legend(nrow = 2)) & 
           theme(legend.position="bottom", panel.grid.minor = element_blank()) )
 
-pdf("example_bias.pdf", width=10, height=8.1)
+pdf("example_bias.pdf", width=10, height=11)
 cowplot::plot_grid(
   cowplot::plot_grid((p3/free(p3b)) & theme(panel.grid.minor = element_blank()), p12, rel_widths=c(4,6)),
+  cowplot::plot_grid(pen0, pfl0, pgc0, nrow=1),
   cowplot::plot_grid(pen1, pfl1, pgc1, nrow=1),
   cowplot::plot_grid(pen2, pfl2, pgc2, nrow=1),
-  nrow=3, rel_heights=c(3.25,2,2))
+  nrow=4, rel_heights=c(3.3,2,2,2))
 dev.off()
 ```
 

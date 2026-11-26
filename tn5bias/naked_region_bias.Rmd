@@ -1,0 +1,139 @@
+---
+title: "Compare GC with more precise tn5 bias"
+output: html_document
+---
+
+
+# Getting the data
+
+```{r setup, message=FALSE, warning=FALSE}
+library(GenomicRanges)
+library(Rsamtools)
+library(SummarizedExperiment)
+library(Biostrings)
+library(BSgenome.Hsapiens.UCSC.hg38)
+library(ggplot2)
+library(cowplot)
+library(ComplexHeatmap)
+```
+
+# Random regions
+
+```{r regions, eval=FALSE}
+set.seed(123)
+nRegions <- 30000L
+regionWidth <- 300L
+chrLen <- seqlengths(BSgenome.Hsapiens.UCSC.hg38)[["chr9"]]
+starts <- sample.int(chrLen - regionWidth + 1L, 2*nRegions)
+regions <- GRanges("chr9", IRanges(starts, width=regionWidth))
+seqs <- getSeq(BSgenome.Hsapiens.UCSC.hg38, regions)
+keep <- which(letterFrequency(seqs, "N") == 0)
+stopifnot(length(keep) >= nRegions)
+keep <- keep[seq_len(nRegions)]
+regions <- sort(regions[keep])
+regions$region <- paste0("chr9:", start(regions), "-", end(regions))
+regBam <- regions
+seqlevels(regBam) <- "9"
+```
+
+# Counts & bias
+
+```{r counts, eval=FALSE}
+suppressPackageStartupMessages({
+  library(weightedMotifAccess)
+  library(tn5bias)
+})
+cntf <- function(regions, ...){
+  se <- peakCountsFromBAM("nakedDNA.bam", regions, paired=TRUE, ignore.strand=TRUE, 
+                          verbose=FALSE, ...)
+  as.integer(assay(se, "counts")[,1])
+}
+d <- data.frame(overlap=cntf(regBam, type="full", ov.type="any"),
+                insertions_ends=cntf(regBam, type="ends", ov.type="any"))
+                
+regPad <- regBam
+ranges(regPad) <- IRanges(start(regBam)-1L, end(regBam)+1L)
+spanning <- cntf(regPad, type="full", ov.type="within")
+uniqueIns <- d$overlap - spanning
+d$insertions_unique <- uniqueIns
+d$GC <- as.numeric(letterFrequency(getSeq(BSgenome.Hsapiens.UCSC.hg38, regions),
+                                 "GC", as.prob=TRUE))
+bs <- getRegionTn5Bias(regions, BSgenome.Hsapiens.UCSC.hg38, method=c("mean","max","quantile"), 
+                       q=c(0.9, 0.98), log2=TRUE, verbose=FALSE)
+colnames(bs) <- paste0("bias_", c("mean","max","q0.9","q0.98"))
+
+d <- cbind(d,bs)
+con <- gzfile("nakedDNA_random300bp_regions.csv.gz", "w")
+write.table(d, con, sep="\t", row.names=FALSE, col.names=TRUE)
+close(con)
+```
+
+```{r compare}
+d <- read.delim("nakedDNA_random300bp_regions.csv.gz")
+d$bias_q0.98 <- NULL
+names(bvals) <- bvals <- grep("bias_",colnames(d),value=TRUE)
+de <- dplyr::bind_rows(lapply(c(GC=NA, bvals), \(x){
+  if(is.na(x)){
+    f <- "overlap ~ ns(GC,2)"
+  }else{
+    f <- paste0("overlap ~ ", x)
+  }
+  m <- glm(as.formula(f), family=quasipoisson, data=d)
+  de1 <- round(1 - m$deviance / m$null.deviance, 3)
+  de1 <- paste0(" ", f, " : ", de1, "\n")
+  if(is.na(x)) return(data.frame(lab=de1))
+  f <- paste0("overlap ~ ns(GC,2) + ", x)
+  m <- glm(as.formula(f), family=quasipoisson, data=d)
+  de2 <- round(1 - m$deviance / m$null.deviance, 3)
+  de2 <- paste0(" ", f, " : ", de2)
+  data.frame(lab=paste0(de1,de2))
+}), .id="type")
+
+names(vars) <- vars <- colnames(d)[-1:-3]
+ag <- dplyr::bind_rows(lapply(vars, \(x){
+  ag <- aggregate(d[,c(x,"overlap")],
+                  by=list(x=cut(d[[x]], quantile(d[[x]], (0:50)/50))), FUN=mean)
+  colnames(ag)[2] <- "bias"
+  ag[,-1]
+}), .id="type")
+
+
+p2 <- ggplot(d, aes(GC, bias_mean)) + 
+  ggrastr::rasterize(ggpointdensity::geom_pointdensity(), dpi = 150) + 
+  labs(x="GC content", y="Mean bias across region") + theme_bw()
+p3 <- ggplot(ag, aes(bias, overlap)) + geom_point() + theme_bw() +
+    labs(x="Bias (quantile bins)", y="Average number of overlaps") +
+    geom_text(data=de, aes(x=-Inf, y=3.2, label=lab), hjust=0, vjust=1, size=3.5) + 
+  facet_wrap(~type, scale="free_x")
+```
+
+```{r}
+data("tn5biasMotif")
+mo <- universalmotif::view_motifs(tn5biasMotif, use.type="PPM", text.size = 11) +
+  scale_x_continuous(breaks=1:10, labels = c(-5:-1, 1:5)) +
+  labs(x="Position relative to the cut site", y="Probability")
+```
+
+```{r}
+e <- read.csv("nakedDNA_bias_vs_insertions_percentiles.csv")
+co <- cor(e$mean_log2bias, log10(e$mean_insertions_per_position))
+p1 <- ggplot(e[which(e$population=="all" & e$track=="shifted"),],
+       aes(mean_insertions_per_position, mean_log2bias)) + geom_point() + 
+  scale_x_log10() + theme_bw() + 
+  annotate(geom="text", x=0.00015, y=2, hjust=0,
+           label=paste("Pearson correlation: ", round(co,3))) +
+  labs(x="Mean number of insertions in bias percentile bin", y="Mean log2(bias)")
+```
+
+
+```{r plot, fig.width=10, fig.height=9}
+pdf("tn5_bias.pdf", width=10, height=9)
+plot_grid(plot_grid(p1, p2, labels=LETTERS[1:2], scale=0.95, nrow=1),
+          plot_grid(p3, scale=0.95, labels="C"),
+          nrow=2, rel_heights = c(2,4))
+dev.off()
+```
+
+```{r}
+sessionInfo()
+```

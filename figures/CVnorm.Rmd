@@ -1,0 +1,166 @@
+---
+title: "Figure"
+output: html_document
+date: "2026-03-18"
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(ComplexHeatmap)
+  library(ggplot2)
+  library(patchwork)
+  library(cowplot)
+  library(SummarizedExperiment)
+})
+base <- 9   # common base font size (pt) for heatmaps and ggplots
+theme_set(theme_bw(base_size=base) +
+  theme(panel.grid.minor=element_blank(),
+        panel.grid.major=element_line(colour="grey92", linewidth=0.3),
+        panel.border=element_rect(colour="grey40", linewidth=0.4),
+        strip.background=element_rect(fill="grey93", colour="grey40", linewidth=0.4),
+        strip.text=element_text(size=base, face="bold"),
+        axis.text=element_text(colour="grey15", size=base-1),
+        legend.text=element_text(size=base-1),
+        axis.ticks=element_line(colour="grey40", linewidth=0.3),
+        legend.key.size=unit(3.5,"mm"),
+        legend.title=element_text(face="bold")))
+mcols <- c(raw="grey45", GCQN="#0072B2", GCsmQN="#56B4E9",
+           CVnorm="#D55E00", smCVnorm="#E69F00", qsmCVnorm="#A02B00")
+```
+
+
+
+
+
+## CVnorm
+
+```{r}
+se <- readRDS("../normalization/Cusanovich_SE.rds")
+norms <- lapply(assays(se)[1:4], \(x){ cor(log1p(as.matrix(x))) })
+norms2 <- lapply(assays(se)[1:4], \(x){ cor(log1p(as.matrix(x)), method="spearman") })
+names(norms2)[1] <- names(norms)[1] <- "raw"
+di <- dist(cbind(norms[[1]],norms2[[1]]))
+ord_obj <- seriation::seriate(di, method = "OLO", control=list(hclust=hclust(di)))
+ss <- names(seriation::get_order(ord_obj))
+cc1 <- do.call(cbind, lapply(norms, \(x) x[ss,ss]))
+cc2 <- do.call(cbind, lapply(norms2, \(x) x[ss,ss]))
+method <- factor(rep(names(norms),each=ncol(se)), names(norms))
+
+df <- colData(se)[row.names(cc1),c("Nuclei","Temperature","Buffer")]
+df$Buffer <- gsub("_TD","",df$Buffer)
+colnames(df)[colnames(df)=="Temperature"] <- "Temp."
+cols <- list(Temp.=c("37C"="#56B4E9", "55C"="#E69F00"),
+             Buffer=c(THS="#F0E442", Omni="#0072B2", Nextera="#D55E00"),
+             Nuclei=c(Native="#009E73", Fixed="#CC79A7"))
+annolp <- list(labels_gp=gpar(fontsize=base-1),
+               title_gp=gpar(fontsize=base, fontface="bold"),
+               grid_height = unit(2.5, "mm"))
+rowAnno1 <- rowAnnotation(df=df, col=cols, simple_anno_size = unit(3, "mm"),
+                         annotation_name_side="top", annotation_name_gp=gpar(fontsize=base),
+                         annotation_legend_param=annolp)
+rowAnno2 <- rowAnnotation(df=df, col=cols, simple_anno_size = unit(3, "mm"),
+                         show_annotation_name=FALSE,
+                         annotation_name_gp=gpar(fontsize=base),
+                         annotation_legend_param=annolp)
+
+coltitles <- as.expression(lapply(names(norms), function(x) {
+  y <- norms[[x]]
+  avg_r <- round(mean(y[lower.tri(y)]), 2)
+  y <- norms2[[x]]
+  avg_rho <- round(mean(y[lower.tri(y)]), 2)
+  bquote(atop(.(x), {bar(r) == .(avg_r)} * "; " * {bar(rho) == .(avg_rho)}))
+}))
+h1 <- Heatmap(cc1, cluster_columns=FALSE, cluster_rows=FALSE, col=viridis::turbo(101), left_annotation=rowAnno1,
+        column_split = method, column_title=coltitles, use_raster=TRUE, raster_quality = 2,
+        width = unit(17, "cm"), height = unit(4, "cm"), row_title="Pearson", row_title_gp=gpar(fontsize=base), show_heatmap_legend = FALSE,
+        show_row_names = FALSE, show_column_names = FALSE, column_title_gp=gpar(fontsize=base))
+h2 <- Heatmap(cc2, cluster_columns=FALSE, cluster_rows=FALSE, col=viridis::turbo(101), left_annotation=rowAnno2,
+        column_split = method, name="correlation", use_raster=TRUE, raster_quality = 2,
+        heatmap_legend_param=list(title_gp=gpar(fontsize=base, fontface="bold"),
+                                  labels_gp=gpar(fontsize=base-1), grid_width=unit(2.5,"mm")),
+        width = unit(17, "cm"), height = unit(4, "cm"), row_title="Spearman", row_title_gp=gpar(fontsize=base), column_title_side = "bottom",
+        show_row_names = FALSE, show_column_names = FALSE, column_title_gp=gpar(fontsize=base))
+```
+
+```{r, fig.width=10, fig.height=4.6}
+draw(h1 %v% h2, merge=TRUE)
+```
+
+
+# Differential accessibility
+
+## Waag et al. data
+
+```{r}
+m <- readRDS("../Waag_et_al_data/DAR_stats.rds")
+m$method <- factor(m$method, rev(levels(m$method)))
+m$method <- relevel(m$method, "raw")
+levels(m$type) <- sub("^perm", "null perm", levels(m$type))
+m$type <- factor(m$type)
+m$dataset <- "Waag et al."
+
+p1 <- ggplot(m, aes(method, nDARs, colour=method, fill=method)) +
+  geom_col(data=m[grepl("real",m$type),], width=0.7) +
+  stat_summary(data=m[!grepl("real",m$type),], fun.data=mean_se, size=0.25, linewidth=0.4) +
+  ggh4x::facet_grid2(dataset~type, scales="free_x", switch="y") + coord_flip() +
+  scale_colour_manual(values=mcols, guide="none") + scale_fill_manual(values=mcols, guide="none") +
+  scale_y_continuous(breaks=scales::pretty_breaks(4), expand=expansion(mult=c(0.02,0.08))) +
+  labs(x=NULL, y="Differentially-accessible regions (FDR<0.05)") +
+  theme(plot.margin=margin(10,5.5,5.5,5.5), strip.placement="outside",
+        strip.text.y.left=element_text(angle=90), strip.background.y=element_blank())
+```
+
+
+## Spiked signal
+
+```{r}
+rw <- readRDS("../normalization/Waag_spikingRes.rds")
+rw$dataset <- "Waag et al."
+rb <- readRDS("../normalization/Bysani_spikingRes.rds")
+rb$setting <- gsub("balanced", "4vs4", rb$setting)
+rb$setting <- gsub("clustered", "4vs4 clustered", rb$setting)
+rb$dataset <- "Bysani et al."
+res <- rbind(rw, rb)
+
+vars <- c(sensitivity="Sensitivity", FDR="FDR", lfc.cor="logFC correlation", mean.disp="Mean dispersion")
+res2 <- reshape2::melt(res, c("method","setting","dataset"), names(vars))
+res2$variable <- factor(res2$variable, names(vars), vars)
+res2$method <- factor(res2$method, c("raw","GCQN","GCsmQN","CVnorm","smCVnorm"))
+res2$dataset <- factor(res2$dataset, c("Waag et al.","Bysani et al."))
+res2$setting <- gsub(" \\(","\n\\(", res2$setting)
+res2$setting <- factor(res2$setting, rev(unique(res2$setting)))   # first setting on top
+hl <- data.frame(xintercept=0.05, variable=factor("FDR", vars))
+
+p2 <- ggplot(res2, aes(value, setting, colour=method)) +
+  geom_vline(data=hl, aes(xintercept=xintercept), linetype="dashed", colour="grey30", linewidth=0.4) +
+  stat_summary(fun.data=mean_se, position=position_dodge(width=0.75), size=0.25, linewidth=0.4) +
+  ggh4x::facet_grid2(dataset~variable, scales="free", space="free_y", independent="x", switch="y") +
+  scale_colour_manual(values=mcols, name=NULL) +
+  scale_x_continuous(breaks=scales::pretty_breaks(3)) +
+  ggh4x::facetted_pos_scales(list(
+    variable=="Sensitivity" ~ scale_x_continuous(breaks=c(0,0.45,0.9)),
+    variable=="FDR" ~ scale_x_continuous(breaks=c(0,.1,.2,.3)),
+    variable=="logFC correlation" ~ scale_x_continuous(breaks=c(.5,.6,.7,.8)),
+    variable=="Mean dispersion" ~ scale_x_continuous(breaks=scales::pretty_breaks(4)))) +
+  guides(colour=guide_legend(nrow=1, override.aes=list(size=0.9, linewidth=0.6))) +
+  labs(x=NULL, y=NULL) +
+  theme(plot.margin=margin(14,5.5,5.5,5.5), legend.position="top", legend.margin=margin(0,0,0,0), legend.box.margin=margin(0,0,-4,0),
+        strip.placement="outside", strip.text.y.left=element_text(angle=90), strip.background.y=element_blank())
+```
+
+# Assembly
+
+```{r, fig.width=10, fig.height=9}
+fig <- plot_grid(
+  grid.grabExpr(draw(h1 %v% h2, merge=TRUE)),
+  p1, p2,
+  nrow=3, rel_heights=c(3.95,1.45,3.5),
+  labels=c("A","B","C"), label_size=base+3, hjust=-0.3
+) +
+  # dataset name for panel A (x aligned with the strips of B/C) and title of panel C
+  draw_label("Zhang et al.", x=0.019, y=0.755, angle=90, size=base, fontface="bold") +
+  draw_label("Spiked signal", x=0.04, y=0.38, size=base+2, fontface="bold", hjust=0, vjust=0.5)
+pdf("Figure_CVnorm.pdf", width=10, height=9); print(fig); dev.off()
+png("Figure_CVnorm.png", width=10, height=9, units="in", res=150); print(fig); dev.off()
+fig
+```

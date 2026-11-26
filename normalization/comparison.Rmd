@@ -17,7 +17,7 @@ suppressPackageStartupMessages({
   library(TFBSTools)
   library(universalmotif)
   library(memes)
-  library(BSgenome.Mmusculus.UCSC.mm10)
+  library(weightedMotifAccess)
 })
 source("https://raw.githubusercontent.com/ETHZ-INS/DTFAB/refs/heads/main/Scripts/GCnorm.R")
 ```
@@ -45,6 +45,20 @@ rowData(se)$flbias <- flbias
 se <- CVnorm(se, toAssay="CVnorm+FL", bs = c(40,40,6))
 saveRDS(se, file="Cusanovich_SE.rds")
 ```
+```{r}
+se <- readRDS("Cusanovich_SE.rds")
+bams <- list.files("/mnt/plger/datasets/CusanovichATACprotocols/aligned", 
+    pattern = "\\.bam$",
+    full.names = TRUE)
+names(bams) <- gsub("\\.bam$","",basename(bams))
+se <- se[which(rowSums(assay(se))>0),]
+wcnts1 <- getWeightedCounts(bams, ranges = rowRanges(se), genome = BSgenome.Hsapiens.UCSC.hg38, fragWeight=TRUE, peakWeight=TRUE, twoPass=FALSE)
+gc()
+assay(se, "weighted") <- assay(wcnts1)
+saveRDS(se, file="Cusanovich_SE.rds")
+```
+
+
 
 ```{r}
 se <- readRDS("Cusanovich_SE.rds")

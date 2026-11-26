@@ -1,0 +1,165 @@
+---
+title: "spikein"
+output: html_document
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(betterChromVAR)
+  library(edgeR)
+  library(BiocParallel)
+  library(ggplot2)
+  library(patchwork)
+})
+source("https://raw.githubusercontent.com/ETHZ-INS/DTFAB/refs/heads/main/Scripts/GCnorm.R")
+```
+
+# Functions
+
+```{r}
+doDAA <- function(a, group){
+  dds <- calcNormFactors(DGEList(a, group=group))
+  mm <- model.matrix(~group)
+  dds <- estimateDisp(dds, mm)
+  fit <- glmQLFit(dds, mm)
+  d <- as.data.frame(topTags(glmQLFTest(fit), n=Inf, sort.by="none"))
+  d$dispersion <- dds$tagwise.dispersion
+  d
+}
+counts <- function(se) assay(se, "counts")
+
+# assigns spiked logFCs to rows so that the signal is clustered in the bias space
+spikeClustered <- function(se, lfc, signs=c("separate","mixed"), centre=NULL){
+  signs <- match.arg(signs)
+  bg   <- getBackgroundBins(se, verbose=FALSE)
+  bin  <- bg@peak2bin - 1L
+  dims <- bg@dims
+  # bin = idx1 + (idx2-1)*bs1 [+ (idx3-1)*bs1*bs2] :
+  stride <- cumprod(c(1, dims))[seq_along(dims)]
+  xy <- sapply(seq_along(dims), function(d) (bin %/% stride[d]) %% dims[d])
+  if(is.null(centre)) centre <- sample(nrow(se), 1)
+  d <- sqrt(rowSums(sweep(xy, 2, xy[centre,])^2))
+  sel <- order(d + runif(length(d), 0, 1e-6))[seq_along(lfc)]
+  lfc <- if(signs=="mixed") sample(lfc) else sort(lfc, decreasing=TRUE)
+  setNames(lfc, row.names(se)[sel])
+}
+
+
+# one simulation (sampling of the samples per group & spiking-in)
+doIter <- function(i, balanced=TRUE, lfc.scale=0.1, n=20000, clustered=FALSE){
+  lfcs <- rgamma(n, shape=10, scale = lfc.scale)*sign(rnorm(n))
+  if(isTRUE(clustered)){
+    lfcs <- spikeClustered(se, lfcs)
+  }else if(isFALSE(clustered)){
+    names(lfcs) <- sample(grep("^chr[1-9]", row.names(se), value=TRUE), n)
+  }else{
+    stopifnot(clustered >0 & clustered <1)
+    lfcs <- spikeClustered(se, lfcs)
+    i <- sample.int(length(lfcs), round(length(lfcs)*(1-clustered)))
+    names(lfcs)[i] <- sample(grep("^chr[1-9]",
+                                  setdiff(row.names(se), names(lfcs)[-i]),
+                                  value=TRUE), n)
+  }
+  if(!isFALSE(balanced)){
+    if(isTRUE(balanced)) balanced <- 3
+    se2 <- se[,sample.int(ncol(se), balanced*2)]
+    se2$group <- rep(LETTERS[1:2], each=balanced)
+  }else{
+    se2 <- se
+    se2$group <- "A"
+    while(length(unique(se2$group))<2 || min(table(se2$group))<3){
+      se2$group <- sample(LETTERS[1:2], ncol(se), replace=TRUE)
+    }    
+  }
+  assay(se2)[names(lfcs),se2$group=="B"] <- round(as.matrix(assay(se2))[names(lfcs),se2$group=="B"] * 2^lfcs)
+  res1 <- doDAA(assay(se2), se2$group)
+  se2 <- CVnorm(se2)
+  res2 <- doDAA(assay(se2, "corrected"), se2$group)
+  se2 <- CVnorm(se2, grouping = se2$group)
+  res3 <- doDAA(assay(se2, "corrected"), se2$group)
+  assay(se2, "GCQN") <- GCQuantileNorm(se2)
+  res4 <- doDAA(assay(se2, "GCQN"), se2$group)
+  assay(se2, "GCsmQN") <- GCSmoothQuantile(se2, bio="group")
+  res5 <- doDAA(assay(se2, "GCsmQN"), se2$group)
+  l <- lapply(list(raw=res1, CVnorm=res2, smCVnorm=res3, GCQN=res4, GCsmQN=res5), \(d){
+    d$truth <- row.names(d) %in% names(lfcs)
+    d$true.lfc <- lfcs[row.names(d)]
+    d$true.lfc[is.na(d$true.lfc)] <- 0
+    d
+  })
+  dplyr::bind_rows(lapply(l, \(d){
+    d <- data.frame(TP=sum(d$FDR<0.05 & d$truth),
+                    FP=sum(d$FDR<0.05 & !d$truth),
+                    lfc.cor=cor(d$logFC, d$true.lfc),
+                    p.TP=sum(d$PValue<0.05 & d$truth),
+                    p.FP=sum(d$PValue<0.05 & !d$truth),
+                    mean.disp=mean(d$dispersion),
+                    median.disp=median(d$dispersion)
+      )
+    d$FDR <- d$FP/(d$TP+d$FP)
+    d$sensitivity <- d$TP/n
+    d
+  }), .id="method")
+}
+```
+
+
+# Bysani dataset
+
+```{r}
+set.seed(123)
+se <- readRDS("Bysani2019ctrl.SE.rds")
+se <- se[!grepl("chrM", seqnames(se)),]
+
+res1 <- dplyr::bind_rows(bplapply(1:10, BPPARAM=MulticoreParam(10, RNGseed=123), balanced=TRUE, lfc.scale=0.09, doIter),
+                         .id="iteration")
+res1$setting <- "balanced (mild)"
+res2 <- dplyr::bind_rows(bplapply(1:10, BPPARAM=MulticoreParam(10, RNGseed=123), balanced=TRUE, lfc.scale=0.12, doIter),
+                         .id="iteration")
+res2$setting <- "balanced (strong)"
+res3 <- dplyr::bind_rows(bplapply(1:10, BPPARAM=MulticoreParam(10, RNGseed=123), clustered=0.6, lfc.scale=0.15, doIter),
+                         .id="iteration")
+res3$setting <- "clustered (strong)"
+
+res <- rbind(res1, res2, res3)
+saveRDS(res, file="Bysani_spikingRes.rds")
+```
+
+
+
+
+# Waag et al. data
+
+```{r, fig.width=10, fig.height=4}
+set.seed(123)
+se <- readRDS("../Waag_et_al_data/bulkATAC.SE.rds")
+mm <- model.matrix(~Sex+Group, data=as.data.frame(colData(se)))
+se <- se[filterByExpr(assay(se),mm),]
+se <- se[,which(se$Group=="Control")]
+se <- se[rowSums(assay(se)>=10)>1,]
+row.names(se) <- paste0("chr",row.names(se))
+
+res1 <- dplyr::bind_rows(bplapply(1:10, BPPARAM=MulticoreParam(10, RNGseed=123), n=12000, balanced=4, lfc.scale=0.05, doIter),
+                         .id="iteration")
+res1$setting <- "4vs4\n(mild)"
+res2 <- dplyr::bind_rows(bplapply(1:10, BPPARAM=MulticoreParam(10, RNGseed=123), n=12000, balanced=4, lfc.scale=0.1, doIter),
+                         .id="iteration")
+res2$setting <- "4vs4\n(strong)"
+res3 <- dplyr::bind_rows(bplapply(1:10, BPPARAM=MulticoreParam(10, RNGseed=123), n=12000, clustered=0.6, lfc.scale=0.12, doIter),
+                         .id="iteration")
+res3$setting <- "4vs4 clustered\n(strong)"
+
+res4 <- dplyr::bind_rows(bplapply(1:10, BPPARAM=MulticoreParam(10, RNGseed=123), n=12000, balanced=6, lfc.scale=0.05, doIter),
+                         .id="iteration")
+res4$setting <- "6vs6\n(mild)"
+
+res5 <- dplyr::bind_rows(bplapply(1:10, BPPARAM=MulticoreParam(10, RNGseed=123), n=12000, balanced=6, lfc.scale=0.1, doIter),
+                         .id="iteration")
+res5$setting <- "6vs6\n(strong)"
+
+
+res <- rbind(res1, res2, res4, res5, res3)
+saveRDS(res, file="Waag_spikingRes.rds")
+```
+
+
