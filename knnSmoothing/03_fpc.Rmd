@@ -1,0 +1,117 @@
+---
+title: "Finite-population correction"
+output: html_document
+---
+
+```{r}
+suppressPackageStartupMessages({
+  library(chromVAR)
+  library(SingleCellExperiment)
+  library(betterChromVAR)
+  library(Matrix)
+  library(BSgenome.Hsapiens.UCSC.hg38)
+  library(BiocParallel)
+  library(ggplot2)
+  library(patchwork)
+})
+register(MulticoreParam(10, progress=TRUE))
+```
+
+```{r}
+f <- "GSE168851_scATAC_K562_TimeCourse_Peak_Matrix_SE.rds"
+if(!file.exists(f)){
+  options(timeout=10000)
+  download.file("https://ftp.ncbi.nlm.nih.gov/geo/series/GSE168nnn/GSE168851/suppl/GSE168851%5FscATAC%5FK562%5FTimeCourse%5FPeak%5FMatrix%5FSE%2Erds%2Egz",
+                paste0(f,".gz"))
+  R.utils::gunzip(paste0(f,".gz"))
+}
+```
+
+Subset to 2k cells:
+
+```{r}
+sce <- readRDS("GSE168851_scATAC_K562_TimeCourse_Peak_Matrix_SE.rds")
+sce <- addGCBias(sce, BSgenome.Hsapiens.UCSC.hg38)
+sce <- sce[,which(sce$sgAssignFinal=="UNK")]
+set.seed(123)
+sce <- sce[,sample.int(ncol(sce), 2000)]
+w <- which(rowSums(assay(sce))>0)
+sce <- sce[w,]
+assayNames(sce) <- "counts"
+```
+
+Motif matches:
+
+```{r}
+if(file.exists("motif_ix.SE.rds")){
+  motif_ix <- readRDS("motif_ix.SE.rds")
+}else{
+  library(motifmatchr)
+  library(BSgenome.Hsapiens.UCSC.hg38)
+  source("/common/scripts/getNonRedundantMotifs.R")
+  motifs <- getNonRedundantMotifs("PWMatrix")
+  motif_ix <- matchMotifs(motifs, sce, genome=BSgenome.Hsapiens.UCSC.hg38)
+  saveRDS(motif_ix, "motif_ix.SE.rds")
+}
+
+row.names(sce) <- as.character(granges(sce))
+row.names(motif_ix) <- gsub(":+","",as.character(granges(motif_ix)),fixed=TRUE)
+moi <- assay(motif_ix)[row.names(sce),]
+```
+
+Select motifs spanning the whole range of proportions
+
+```{r}
+p <- colSums(moi)/nrow(moi)
+o <- seq_len(ncol(moi))[order(p)]
+sel <- unique(c(tail(o, 60), o[round(seq(1, length(o)-60, length.out=60))]))
+moi <- moi[,sel]
+```
+
+Split in halves
+
+```{r}
+sp <- betterChromVAR:::.thinCounts(assay(sce), 0.5, pairs=TRUE)
+se2 <- SummarizedExperiment(list(counts=cbind(sp$A, sp$B)), rowData=rowData(sce))
+colnames(se2) <- paste0("c", seq_len(2*ncol(sce)))
+```
+
+run methods
+
+```{r}
+z <- list()
+z$chromVAR <- computeDeviations(se2, moi,
+  background_peaks=getBackgroundPeaks(se2, niterations=100))
+z[["betterChromVAR(fpc=F)"]] <- betterChromVAR(se2, moi, fpc=FALSE, minCount=NULL, tol=NULL)
+z[["betterChromVAR(fpc=T)"]] <- betterChromVAR(se2, moi, fpc=TRUE, minCount=NULL, tol=NULL)
+```
+
+compute calibration
+
+```{r}
+n <- ncol(sce)
+res <- dplyr::bind_rows(lapply(z, \(dev){
+  z <- assay(dev, "z")
+  data.frame( motif=row.names(z),
+              sp.diff=rowMeans((z[,1:n]-z[,n+1:n])^2, na.rm=TRUE)/2,
+              rowSDs=rowSds(z))
+}), .id="method")
+res$method <- factor(res$method, unique(res$method))
+res$p <- (colSums(moi)/nrow(moi))[res$motif]
+```
+
+
+```{r}
+p1 <- ggplot(res, aes(p, rowSDs, color=method)) + 
+  geom_point() + geom_smooth(method=MASS::rlm, se=FALSE) + theme_bw() +
+  labs(x="Proportion of the peaks matching the motif",
+       y="Standard deviation of the z-scores")
+p2 <- ggplot(res, aes(p, sp.diff, color=method)) + 
+  geom_point() + geom_smooth(method=MASS::rlm, se=FALSE) + theme_bw() +
+  labs(x="Proportion of the peaks matching the motif",
+       y="Split-half calibration")
+pdf("SDcalibration.pdf", width=10, height=5)
+p1 + p2 + plot_layout(guide="collect") & 
+  theme(legend.position="bottom")
+dev.off()
+```
